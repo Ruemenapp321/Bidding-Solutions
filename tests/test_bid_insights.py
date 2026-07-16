@@ -7,6 +7,7 @@ from app.airports import coterminal_group_for_airport, expand_airports
 from app.main import (
     app,
     build_bid_synopsis,
+    classify_redeye,
     consolidate_pairings,
     db,
     filter_pairings_for_profile,
@@ -28,8 +29,8 @@ def pairing(pairing_id="4461", start="JFK", fleet="320", date="2026-08-11"):
         "tafb": "28:00",
         "confidence": 1.0,
         "legs": [
-            {"day": "A", "departure": start, "arrival": "BOS", "deadhead": False},
-            {"day": "B", "departure": "BOS", "arrival": start, "deadhead": False},
+            {"day": "A", "departure": start, "departure_time": "0830", "arrival": "BOS", "arrival_time": "1030", "deadhead": False},
+            {"day": "B", "departure": "BOS", "departure_time": "1700", "arrival": start, "arrival_time": "1900", "deadhead": False},
         ],
         "layovers": [{"city": "BOS", "duration": "16:00"}],
     }
@@ -61,7 +62,7 @@ def test_american_bid_fleet_is_a_hard_filter():
 def test_synopsis_summarizes_redeyes_deadheads_lengths_starts_and_fleets():
     normal = pairing("1001", fleet="320")
     redeye = pairing("1002", start="LGA", fleet="737")
-    redeye["block"] += " REDEYE"
+    redeye["legs"][0]["departure_time"] = "0230"
     redeye["legs"][0]["deadhead"] = True
     synopsis = build_bid_synopsis([normal, redeye])
     assert synopsis["total"] == 2
@@ -70,6 +71,38 @@ def test_synopsis_summarizes_redeyes_deadheads_lengths_starts_and_fleets():
     assert synopsis["overnight_city_count"] == 1
     assert {row["airport"] for row in synopsis["start_airports"]} == {"JFK", "LGA"}
     assert {row["fleet"] for row in synopsis["fleets"]} == {"320", "737"}
+    assert synopsis["count_basis"] == "unique_trip_id"
+
+
+def test_redeye_requires_a_structured_leg_departure_during_wocl():
+    trip = pairing("2001")
+    trip["block"] = "REDEYE RPT 0230 RLS 0545 HOTEL 0300"
+    trip["legs"][0].update({"departure_time": "0159", "arrival_time": "0300"})
+    trip["legs"][1].update({"departure_time": "0600", "arrival_time": "0750"})
+    assert classify_redeye(trip) == "none"
+
+    trip["legs"][0]["departure_time"] = "0200"
+    result = score_pairing(trip, {"allow_productive_redeye": False, "prefer_operate": False})
+    assert result["redeye"] == "WOCL departure"
+    assert result["redeye_legs"][0]["departure_time"] == "0200"
+    assert result["legs"][0]["wocl_departure"] is True
+    assert any("02:00–05:59 local" in reason for reason in result["reasons"])
+
+    trip["legs"][0]["departure_time"] = "0559"
+    assert classify_redeye(trip) == "WOCL departure"
+    trip["legs"][0]["departure_time"] = "06:00"
+    assert classify_redeye(trip) == "none"
+
+
+def test_repeated_operating_days_are_one_unique_trip_with_all_dates():
+    monday = pairing("3001", date="2026-08-03")
+    tuesday = pairing("3001", date="2026-08-04")
+    unique = consolidate_pairings([monday, tuesday])
+    assert len(unique) == 1
+    assert unique[0]["operating_dates"] == ["2026-08-03", "2026-08-04"]
+    synopsis = build_bid_synopsis([monday, tuesday])
+    assert synopsis["total"] == 1
+    assert synopsis["count_basis"] == "unique_trip_id"
 
 
 def test_duplicate_rotation_keeps_rich_record_and_incomplete_cannot_rank_first():

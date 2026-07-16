@@ -177,7 +177,7 @@ INDEX_HTML = r"""
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#071525">
   <title>CrewBidIQ</title>
-  <link rel="stylesheet" href="/static/app.css?v=0422">
+  <link rel="stylesheet" href="/static/app.css?v=0423">
 </head>
 <body data-classic-page="__CLASSIC_PAGE__">
 <div class="app-shell">
@@ -359,8 +359,8 @@ INDEX_HTML = r"""
           <article class="guide-card">
             <h4>Redeyes and aircraft</h4>
             <ul class="guide-list">
-              <li><strong>Allow mid-rotation redeyes:</strong> reduces the general redeye penalty when overnight flying is detected.</li>
-              <li><strong>Allow redeye starts, Avoid final redeyes, and Maximum legs after redeye rest:</strong> are saved for planning; phase-specific redeye weighting will become active as airline duty classification expands.</li>
+              <li><strong>Allow mid-rotation redeyes:</strong> reduces the penalty when a parsed flight leg departs during the Window of Circadian Low (WOCL), 02:00 through 05:59 local departure time.</li>
+              <li><strong>Allow redeye starts, Avoid final redeyes, and Maximum legs after redeye rest:</strong> are saved for planning; phase-specific WOCL weighting will become active as airline duty classification expands.</li>
               <li><strong>Preferred aircraft codes:</strong> favors matching codes found in the package. Use the airline’s printed code, such as 321E, rather than relying only on a marketing aircraft name.</li>
               <li><strong>Bid fleet categories:</strong> is a hard filter when the package contains fleet metadata. American examples include 320, 737, 777, and 787.</li>
               <li><strong>Preferred and avoid start airports:</strong> adjust rank from the first departure airport. Avoid takes priority if an airport appears in both lists. Delta NYC expands to JFK, LGA, and EWR.</li>
@@ -385,7 +385,7 @@ INDEX_HTML = r"""
               <li><strong>Other-airline credit:</strong> airline-provided trip or sequence credit when available. Total Pay appears only after that airline's pay rules are defined.</li>
               <li><strong>TAFB:</strong> total time away from base.</li>
               <li><strong>Trip length:</strong> number of parsed duty periods.</li>
-              <li><strong>Recovery:</strong> a quick description of workload around detected redeye flying.</li>
+              <li><strong>Recovery:</strong> a quick description of workload around flight legs departing during WOCL (02:00 through 05:59 local).</li>
               <li><strong>Legs by duty day:</strong> working flight segments in each RPT-to-RLS duty period; deadheads are counted separately.</li>
             </ul>
           </article>
@@ -428,7 +428,7 @@ INDEX_HTML = r"""
     __MOBILE_NAV__
   </div>
 </div>
-<script src="/static/app.js?v=0422"></script>
+<script src="/static/app.js?v=0423"></script>
 <script>document.getElementById('mobileGuideBtn').addEventListener('click',()=>document.getElementById('guideBtn').click());</script>
 </body></html>
 """
@@ -557,7 +557,7 @@ def pairing_record_quality(pairing: dict[str, Any]) -> tuple[int, int, int, int,
 
 
 def consolidate_pairings(pairings: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Keep the richest record for repeated IDs and retain bounded diagnostics."""
+    """Keep one unique trip per repeated ID while retaining every operating date."""
     order: list[str] = []
     candidates: dict[str, list[dict[str, Any]]] = {}
     for pairing in pairings:
@@ -573,6 +573,17 @@ def consolidate_pairings(pairings: list[dict[str, Any]]) -> list[dict[str, Any]]
     for pairing_id in order:
         records = candidates[pairing_id]
         selected = dict(max(records, key=pairing_record_quality))
+        operating_dates: list[str] = []
+        for record in records:
+            value = record.get("effective")
+            values = value if isinstance(value, list) else re.split(r"\s*,\s*", str(value or ""))
+            for operating_date in values:
+                token = str(operating_date).strip()
+                if token and token not in operating_dates:
+                    operating_dates.append(token)
+        if operating_dates:
+            selected["effective"] = ", ".join(operating_dates)
+            selected["operating_dates"] = operating_dates
         if len(records) > 1:
             selected["parser_candidates"] = [
                 {
@@ -745,13 +756,48 @@ def detect_start_airport(pairing: dict[str, Any]) -> str | None:
     return None
 
 
+WOCL_START_MINUTES = 2 * 60
+WOCL_END_MINUTES = 6 * 60
+
+
+def clock_minutes(value: Any) -> int | None:
+    """Parse a structured local clock value without mistaking durations for times."""
+    token = str(value or "").strip().replace(":", "")
+    if not re.fullmatch(r"\d{3,4}", token):
+        return None
+    token = token.zfill(4)
+    hours, minutes = int(token[:2]), int(token[2:])
+    if hours > 23 or minutes > 59:
+        return None
+    return hours * 60 + minutes
+
+
+def is_wocl_departure(value: Any) -> bool:
+    minutes = clock_minutes(value)
+    return minutes is not None and WOCL_START_MINUTES <= minutes < WOCL_END_MINUTES
+
+
+def wocl_departures(pairing: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return flight legs departing from 02:00 through 05:59 local time."""
+    matches: list[dict[str, Any]] = []
+    for index, leg in enumerate(pairing.get("legs", []) or [], 1):
+        if not is_wocl_departure(leg.get("departure_time")):
+            continue
+        matches.append({
+            "leg": index,
+            "day": leg.get("day"),
+            "flight": leg.get("flight"),
+            "departure": leg.get("departure"),
+            "departure_time": leg.get("departure_time"),
+            "arrival": leg.get("arrival"),
+            "arrival_time": leg.get("arrival_time"),
+            "deadhead": bool(leg.get("deadhead")),
+        })
+    return matches
+
+
 def classify_redeye(pairing: dict[str, Any]) -> str:
-    upper = str(pairing.get("block") or "").upper()
-    if "REDEYE" in upper:
-        return "flagged"
-    if len(re.findall(r"\b(?:2[1-3]|0[0-6])\d{2}\b", upper)) >= 2:
-        return "possible"
-    return "none"
+    return "WOCL departure" if wocl_departures(pairing) else "none"
 
 
 def pairing_duty_count(pairing: dict[str, Any]) -> int:
@@ -780,6 +826,7 @@ def _breakdown(counter: Counter[str], total: int, label: str) -> list[dict[str, 
 
 
 def build_bid_synopsis(pairings: list[dict[str, Any]]) -> dict[str, Any]:
+    pairings = consolidate_pairings(pairings)
     total = len(pairings)
     complete = sum(bool(pairing.get("legs")) for pairing in pairings)
     redeyes = sum(classify_redeye(pairing) != "none" for pairing in pairings)
@@ -790,6 +837,7 @@ def build_bid_synopsis(pairings: list[dict[str, Any]]) -> dict[str, Any]:
     fleets = Counter(str(pairing.get("fleet")) for pairing in pairings if pairing.get("fleet"))
     return {
         "total": total,
+        "count_basis": "unique_trip_id",
         "complete": complete,
         "incomplete": total - complete,
         "redeye": {"count": redeyes, "percent": round(redeyes / total * 100, 1) if total else 0.0},
@@ -908,14 +956,19 @@ def score_pairing(pairing: dict[str, Any], profile: dict[str, Any]) -> dict[str,
         score -= (len(transfers) - max_transfers) * float(w.get("transfer") or 32)
         reasons.append("Requires an airport transfer")
 
-    redeye = classify_redeye(pairing)
+    redeye_legs = wocl_departures(pairing)
+    redeye = "WOCL departure" if redeye_legs else "none"
 
     if redeye != "none":
         if profile.get("allow_productive_redeye", True):
             score -= 18
         else:
             score -= 55
-        reasons.append(f"{redeye} redeye signal")
+        departures = ", ".join(
+            f"{leg.get('departure') or 'Unknown'} {leg.get('departure_time')}"
+            for leg in redeye_legs[:3]
+        )
+        reasons.append(f"Departs during WOCL (02:00–05:59 local): {departures}")
 
     req_hits = sorted(matching_dates(dates, required_days))
     pref_hits = sorted(matching_dates(dates, preferred_days))
@@ -986,6 +1039,10 @@ def score_pairing(pairing: dict[str, Any], profile: dict[str, Any]) -> dict[str,
 
     level = match_level(score, calendar_conflicts)
     terminology = get_airline_terminology(airline)
+    result_legs = [
+        {**leg, "wocl_departure": is_wocl_departure(leg.get("departure_time"))}
+        for leg in pairing.get("legs", []) or []
+    ]
     result = {
         "pairing": pairing["id"],
         "score": round(score, 1),
@@ -998,6 +1055,7 @@ def score_pairing(pairing: dict[str, Any], profile: dict[str, Any]) -> dict[str,
         "equipment_codes": pairing.get("equipment_codes", parsed_equipment),
         "equipment_mapping_status": pairing.get("equipment_mapping_status"),
         "redeye": redeye,
+        "redeye_legs": redeye_legs,
         "deadheads": deadheads,
         "transfers": transfers,
         "calendar_conflicts": calendar_conflicts,
@@ -1011,7 +1069,7 @@ def score_pairing(pairing: dict[str, Any], profile: dict[str, Any]) -> dict[str,
         "checkin": pairing.get("checkin"),
         "release": pairing.get("release"),
         "layovers": pairing.get("layovers", []),
-        "legs": pairing.get("legs", []),
+        "legs": result_legs,
         "duty_legs": duty_counts,
         "first_day_legs": duty_counts[0] if duty_counts else 0,
         "last_day_legs": duty_counts[-1] if duty_counts else 0,
@@ -1020,6 +1078,7 @@ def score_pairing(pairing: dict[str, Any], profile: dict[str, Any]) -> dict[str,
         "display_label": terminology.singular,
         "original_display": block,
         "operations": pairing.get("operations"),
+        "operating_dates": pairing.get("operating_dates") or dates,
         "positions": pairing.get("positions", []),
         "fleet": pairing.get("fleet"),
         "satellite": pairing.get("satellite"),
@@ -1165,10 +1224,15 @@ def score_southwest_line(line: dict[str, Any], pairing_scores: dict[str, dict[st
     conflicts = sorted(set(c for x in members for c in x.get("calendar_conflicts", [])))
     touched = list(dict.fromkeys(c for item in members for c in item.get("touched_cities", [])))
     duty_legs = [count for item in members for count in item.get("duty_legs", [])]
+    redeye_legs = [
+        {"pairing": item.get("pairing"), **leg}
+        for item in members
+        for leg in item.get("redeye_legs", [])
+    ]
     result = {
         "pairing": line["id"], "item_type": "line", "score": score,
         "dates": [], "cities": cities, "touched_cities": touched, "preferred_aircraft": sorted(set(a for item in members for a in item.get("preferred_aircraft", []))),
-        "redeye": "flagged" if any(x.get("redeye") != "none" for x in members) else "none",
+        "redeye": "WOCL departure" if redeye_legs else "none", "redeye_legs": redeye_legs,
         "deadheads": sum(x.get("deadheads", 0) for x in members), "transfers": sorted(set(t for x in members for t in x.get("transfers", []))),
         "calendar_conflicts": conflicts,
         "reasons": [f"Contains pairings: {', '.join(line['pairing_ids'])}"] + list(dict.fromkeys(reasons))[:12],
