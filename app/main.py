@@ -10,6 +10,8 @@ import sqlite3
 import threading
 import time
 import uuid
+import zipfile
+import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -31,7 +33,7 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("pairingiq")
 
-app = FastAPI(title="CrewBidIQ 3.0", version="3.0.0")
+app = FastAPI(title="CrewBidIQ")
 app.mount("/static", StaticFiles(directory=BASE_DIR / "app" / "static"), name="static")
 job_lock = threading.Lock()
 
@@ -90,152 +92,83 @@ INDEX_HTML = r"""
 <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
-<header>
-  <div class="brand">
-    <div><h1>CrewBidIQ</h1><p>Build the month you actually want.</p></div>
-    <span class="version">v3.0</span>
-  </div>
-</header>
-
+<header><div class="brand"><div><h1>CrewBidIQ</h1><p>Build the month you actually want.</p></div></div></header>
 <main>
 <section class="card">
-  <h2>1. Upload bid package</h2>
+  <h2>1. Upload bid files</h2>
   <div class="grid">
-    <label>Bid package<input id="file" type="file" accept=".pdf,.html,.htm,.txt,.csv"></label>
-    <label>Airline<input id="airline" placeholder="Example: Delta, American, United"></label>
+    <label>Airline
+      <select id="airlineChoice">
+        <option value="delta">Delta Air Lines</option>
+        <option value="southwest">Southwest Airlines</option>
+        <option value="american" disabled>American Airlines (coming soon)</option>
+      </select>
+    </label>
     <label>Base<input id="baseAirport" placeholder="Example: ATL"></label>
     <label>Fleet / category<input id="fleet" placeholder="Example: A320 Captain"></label>
     <label>Bid month<input id="bidMonth" type="month"></label>
-    <label>Package format
-      <select id="parserChoice">
-        <option value="auto">Auto-detect</option>
-        <option value="delta">Delta master pairing package</option>
-        <option value="american">American sequence package (beta)</option>
-        <option value="southwest">Southwest pairing text package</option>
-        <option value="generic">Generic fallback</option>
-      </select>
-    </label>
   </div>
-  <div class="actions">
-    <button id="analyzeBtn">Upload and analyze</button>
-    <button id="demoBtn" class="secondary">Load demo</button>
+  <div id="deltaUploads" class="upload-group">
+    <label>Delta bid package PDF<input id="deltaFile" type="file" accept=".pdf"></label>
   </div>
-  <div id="jobPanel" class="job-panel hidden">
-    <div class="job-row"><strong id="jobStatus">Preparing…</strong><span id="jobPercent">0%</span></div>
-    <div class="progress"><div id="progressFill"></div></div>
-    <div id="jobMessage" class="muted small"></div>
+  <div id="southwestUploads" class="upload-group hidden">
+    <div class="grid">
+      <label>Southwest Pairings ZIP<input id="southwestPairingsFile" type="file" accept=".zip"></label>
+      <label>Southwest Lines ZIP<input id="southwestLinesFile" type="file" accept=".zip"></label>
+    </div>
+    <p class="muted small">Both ZIP files are required. CrewBidIQ combines the pairing details with the lines offered, then ranks complete lines.</p>
   </div>
+  <div class="actions"><button id="analyzeBtn">Upload and analyze</button><button id="demoBtn" class="secondary">Try Sample Data</button></div>
+  <div id="jobPanel" class="job-panel hidden"><div class="job-row"><strong id="jobStatus">Preparing…</strong><span id="jobPercent">0%</span></div><div class="progress"><div id="progressFill"></div></div><div id="jobMessage" class="muted small"></div></div>
   <div id="errorBox" class="error hidden"></div>
 </section>
 
 <section class="card">
-  <div class="section-head">
-    <div><h2>2. Trip preferences</h2><p class="muted">These settings work for any fleet or airline.</p></div>
-    <button id="saveProfileBtn" class="ghost">Save profile</button>
-  </div>
-
+  <div class="section-head"><div><h2>2. Trip preferences</h2><p class="muted">Enter only the preferences that matter to you. Blank fields are ignored.</p></div><button id="saveProfileBtn" class="ghost">Save preferences</button></div>
   <div class="grid">
-    <label>Elite layover cities<input id="eliteCities" value="BOS,LAX,SFO,SAN,SEA,PDX"></label>
-    <label>Secondary cities<input id="secondaryCities" value="DCA,BWI,MIA,FLL,PBI,MCO,TPA,RSW"></label>
-    <label>Interesting cities<input id="smallCities" value="TVC,BNA,SAV,CHS,BTV"></label>
-    <label>Penalty cities<input id="penaltyCities" value="AUS,SAT,DFW,IAH,HOU,SDQ,STI"></label>
-    <label>Preferred aircraft / subtype codes<input id="preferredAircraft" placeholder="Example: NEO, 3NE, 321XLR"></label>
-    <label>Maximum deadheads<input id="maxDeadheads" type="number" min="0" value="1"></label>
-    <label>Maximum airport transfers<input id="maxTransfers" type="number" min="0" value="0"></label>
-    <label>Preferred trip lengths (days)<input id="preferredTripLengths" value="2,3,4"></label>
-    <label>Maximum legs per duty day<input id="maxLegsPerDay" type="number" min="1" value="3"></label>
-    <label>Minimum layover hours<input id="minLayoverHours" type="number" min="0" value="12"></label>
+    <label>Elite layover cities<input id="eliteCities" placeholder="Example: SAN,BOS,LAX"><span class="help">Your highest-value overnight cities.</span></label>
+    <label>Secondary cities<input id="secondaryCities" placeholder="Example: SEA,PDX,MIA"><span class="help">Cities you like, but less strongly.</span></label>
+    <label>Interesting cities<input id="smallCities" placeholder="Example: SAV,CHS,BTV"><span class="help">Occasional or niche favorites.</span></label>
+    <label>Penalty cities<input id="penaltyCities" placeholder="Example: DFW,IAH"><span class="help">Cities that should reduce a score.</span></label>
+    <label>Preferred aircraft / subtype codes<input id="preferredAircraft" placeholder="Example: NEO,3NE,321"></label>
+    <label>Maximum deadheads<input id="maxDeadheads" type="number" min="0" placeholder="Example: 1"></label>
+    <label>Maximum airport transfers<input id="maxTransfers" type="number" min="0" placeholder="Example: 0"></label>
+    <label>Preferred trip lengths (days)<input id="preferredTripLengths" placeholder="Example: 2,3,4"></label>
+    <label>Maximum legs per duty day<input id="maxLegsPerDay" type="number" min="1" placeholder="Example: 3"></label>
+    <label>Minimum layover hours<input id="minLayoverHours" type="number" min="0" placeholder="Example: 12"></label>
   </div>
 </section>
 
 <section class="card">
   <h2>3. Calendar and quality-of-life preferences</h2>
   <div class="grid">
-    <label>Required days off
-      <textarea id="requiredDaysOff" placeholder="YYYY-MM-DD, one or more dates separated by commas"></textarea>
-    </label>
-    <label>Preferred days off
-      <textarea id="preferredDaysOff" placeholder="YYYY-MM-DD, one or more dates separated by commas"></textarea>
-    </label>
-    <label>Holidays / special dates
-      <textarea id="holidayDates" placeholder="Example: 2026-12-25,2027-01-01"></textarea>
-    </label>
-    <label>Preferred weekdays off
-      <input id="preferredWeekdays" placeholder="Example: SAT,SUN">
-    </label>
-    <label>Maximum consecutive work days
-      <input id="maxConsecutiveWorkDays" type="number" min="1" value="5">
-    </label>
-    <label>Minimum consecutive days off
-      <input id="minConsecutiveDaysOff" type="number" min="1" value="2">
-    </label>
-    <label>Earliest report time
-      <input id="earliestReport" type="time" value="06:00">
-    </label>
-    <label>Latest release time
-      <input id="latestRelease" type="time" value="22:00">
-    </label>
-    <label>Commuter: latest acceptable check-in
-      <input id="commuterLatestCheckin" type="time" value="08:30">
-    </label>
-    <label>Commuter: earliest acceptable release
-      <input id="commuterEarliestRelease" type="time" value="21:00">
-    </label>
+    <label>Required days off<textarea id="requiredDaysOff" placeholder="YYYY-MM-DD, separated by commas"></textarea></label>
+    <label>Preferred days off<textarea id="preferredDaysOff" placeholder="YYYY-MM-DD, separated by commas"></textarea></label>
+    <label>Holidays / special dates<textarea id="holidayDates" placeholder="Example: 2026-12-25,2027-01-01"></textarea></label>
+    <label>Preferred weekdays off<input id="preferredWeekdays" placeholder="Example: SAT,SUN"></label>
+    <label>Maximum consecutive work days<input id="maxConsecutiveWorkDays" type="number" min="1" placeholder="Example: 5"></label>
+    <label>Minimum consecutive days off<input id="minConsecutiveDaysOff" type="number" min="1" placeholder="Example: 2"></label>
+    <label>Earliest report time<input id="earliestReport" type="time"></label>
+    <label>Latest release time<input id="latestRelease" type="time"></label>
+    <label>Commuter: latest acceptable check-in<input id="commuterLatestCheckin" type="time"></label>
+    <label>Commuter: earliest acceptable release<input id="commuterEarliestRelease" type="time"></label>
   </div>
-
   <div class="checks">
-    <label><input id="preferWeekendsOff" type="checkbox"> Prefer weekends off</label>
-    <label><input id="avoidHolidays" type="checkbox"> Avoid working listed holidays</label>
-    <label><input id="allowProductiveRedeye" type="checkbox" checked> Allow productive redeyes</label>
-    <label><input id="avoidFinalRedeye" type="checkbox"> Avoid final-day redeyes</label>
-    <label><input id="avoidReserve" type="checkbox" checked> Avoid reserve / standby lines</label>
-    <label><input id="preferOperate" type="checkbox" checked> Prefer operating over deadheading</label>
+    <label><input id="preferWeekendsOff" type="checkbox"> Prefer weekends off</label><label><input id="avoidHolidays" type="checkbox"> Avoid listed holidays</label><label><input id="allowProductiveRedeye" type="checkbox"> Allow productive redeyes</label><label><input id="avoidFinalRedeye" type="checkbox"> Avoid final-day redeyes</label><label><input id="avoidReserve" type="checkbox"> Avoid reserve / standby lines</label><label><input id="preferOperate" type="checkbox"> Prefer operating over deadheading</label>
   </div>
 </section>
 
 <section class="card">
-  <h2>4. Scoring weights</h2>
+  <div class="section-head"><div><h2>4. Scoring weights</h2><p class="muted">Weights control ranking, not exclusion. Higher numbers make a preference matter more. Use 0 to ignore it; 10–25 for a mild preference; 25–60 for an important preference; 60+ only for a major priority. Required-day conflicts are intentionally very high.</p></div><button id="guideBtn" class="ghost">User guide</button></div>
+  <div id="guide" class="guide hidden"><h3>Filters vs. weights</h3><p><strong>Filters</strong> remove results that fail a requirement. <strong>Weights</strong> move results up or down while keeping them available. Avoid making every weight extremely high; reserve the largest values for what truly drives your bid.</p><h3>Simple starting point</h3><p>Start with 2–4 preferences. Give favorites a weight around 20–30, strong dislikes 20–40, and major quality-of-life priorities 50–75. Review the explanations in the results and adjust.</p></div>
   <div class="grid compact">
-    <label>Elite city<input id="wElite" type="number" value="28"></label>
-    <label>Secondary city<input id="wSecondary" type="number" value="12"></label>
-    <label>Interesting city<input id="wSmall" type="number" value="6"></label>
-    <label>Penalty city<input id="wPenalty" type="number" value="18"></label>
-    <label>Preferred aircraft<input id="wAircraft" type="number" value="20"></label>
-    <label>Pure/simple trip<input id="wPure" type="number" value="65"></label>
-    <label>Airport transfer<input id="wTransfer" type="number" value="32"></label>
-    <label>Extra deadhead<input id="wDeadhead" type="number" value="18"></label>
-    <label>Required day conflict<input id="wRequiredConflict" type="number" value="500"></label>
-    <label>Preferred day conflict<input id="wPreferredConflict" type="number" value="35"></label>
-    <label>Holiday conflict<input id="wHolidayConflict" type="number" value="60"></label>
-    <label>Early report<input id="wEarlyReport" type="number" value="20"></label>
-    <label>Late release<input id="wLateRelease" type="number" value="20"></label>
+    <label>Elite city<input id="wElite" type="number" value="28"></label><label>Secondary city<input id="wSecondary" type="number" value="12"></label><label>Interesting city<input id="wSmall" type="number" value="6"></label><label>Penalty city<input id="wPenalty" type="number" value="18"></label><label>Preferred aircraft<input id="wAircraft" type="number" value="20"></label><label>Pure/simple trip<input id="wPure" type="number" value="65"></label><label>Airport transfer<input id="wTransfer" type="number" value="32"></label><label>Extra deadhead<input id="wDeadhead" type="number" value="18"></label><label>Required day conflict<input id="wRequiredConflict" type="number" value="500"></label><label>Preferred day conflict<input id="wPreferredConflict" type="number" value="35"></label><label>Holiday conflict<input id="wHolidayConflict" type="number" value="60"></label><label>Early report<input id="wEarlyReport" type="number" value="20"></label><label>Late release<input id="wLateRelease" type="number" value="20"></label>
   </div>
 </section>
 
 <section class="card">
-  <div class="section-head">
-    <div><h2>5. Ranked pairings</h2><p id="summary" class="muted">No analysis yet.</p></div>
-    <div class="actions tight">
-      <a id="csvLink" class="button secondary disabled" href="#">Export CSV</a>
-      <button id="printBtn" class="ghost">Print</button>
-    </div>
-  </div>
-  <div class="table-wrap">
-    <table>
-      <thead>
-        <tr>
-          <th>Rank</th><th>Pairing</th><th>Score</th><th>Parser</th><th>Credit</th><th>TAFB</th><th>Dates</th><th>Cities</th>
-          <th>Layovers</th><th>Aircraft</th><th>Redeye</th><th>DH</th><th>Transfers</th><th>Calendar conflicts</th><th>Why</th>
-        </tr>
-      </thead>
-      <tbody id="results"></tbody>
-    </table>
-  </div>
-</section>
-
-<section class="card">
-  <h2>What “fleet generic” means</h2>
-  <p class="muted">No airline, aircraft, base, city, holiday, or schedule rule is hardcoded. Pilots can save different profiles for narrowbody, widebody, captain, first officer, commuter, reserve, or different bases. Airline-specific parsers can be added later without changing the preference engine.</p>
+  <div class="section-head"><div><h2 id="resultsTitle">5. Ranked pairings</h2><p id="summary" class="muted">No analysis yet.</p></div><div class="actions tight"><select id="resultLimit"><option value="25">Top 25</option><option value="50">Top 50</option><option value="100">Top 100</option><option value="all">Show all</option></select><a id="csvLink" class="button secondary disabled" href="#">Export CSV</a><button id="printBtn" class="ghost">Print</button></div></div>
+  <div class="table-wrap"><table><thead><tr><th>Rank</th><th id="itemHeader">Pairing</th><th>Score</th><th>Credit</th><th>TAFB</th><th>Operating dates</th><th>Cities</th><th>Layovers</th><th>Aircraft</th><th>Redeye</th><th>DH</th><th>Transfers</th><th>Conflicts</th><th>Why</th><th>Soft credit</th></tr></thead><tbody id="results"></tbody></table></div>
 </section>
 </main>
 <script src="/static/app.js"></script>
@@ -339,7 +272,7 @@ def score_pairing(pairing: dict[str, Any], profile: dict[str, Any]) -> dict[str,
     block = pairing["block"]
     upper = block.upper()
     cities = detect_airports(block, pairing)
-    dates = detect_dates(block)
+    dates = list_field(pairing.get("effective")) if pairing.get("effective") else detect_dates(block)
 
     elite = set(list_field(profile.get("elite_cities")))
     secondary = set(list_field(profile.get("secondary_cities")))
@@ -457,77 +390,170 @@ def score_pairing(pairing: dict[str, Any], profile: dict[str, Any]) -> dict[str,
         "release": pairing.get("release"),
         "layovers": pairing.get("layovers", []),
         "legs": pairing.get("legs", []),
+        "soft_credit": " ".join(re.findall(r"\b\d{2,3}(?:MCD|TRP|DPA|FDP|SIT|EDP|HOL|CRD)\b", upper)) or None,
+        "item_type": "pairing",
     }
 
 
-def process_job(job_id: str, path: Path, suffix: str, profile: dict[str, Any], parser_choice: str) -> None:
+def extract_archive_text(zip_path: Path, target_dir: Path, job_id: str, label: str) -> str:
+    target_dir.mkdir(parents=True, exist_ok=True)
+    chunks: list[str] = []
+    with zipfile.ZipFile(zip_path) as archive:
+        safe_members = [m for m in archive.infolist() if not m.is_dir() and ".." not in Path(m.filename).parts]
+        if not safe_members:
+            raise RuntimeError(f"The {label} ZIP does not contain any files.")
+        for index, member in enumerate(safe_members, 1):
+            suffix = Path(member.filename).suffix.lower()
+            if suffix not in {".pdf", ".html", ".htm", ".txt", ".csv"}:
+                continue
+            extracted = target_dir / f"{index}_{Path(member.filename).name}"
+            with archive.open(member) as src, extracted.open("wb") as dst:
+                shutil.copyfileobj(src, dst)
+            chunks.append(extract_text(extracted, suffix, job_id))
+            update_job(job_id, progress=min(60, 10 + int(index / max(len(safe_members), 1) * 45)), message=f"Reading {label} file {index} of {len(safe_members)}")
+    if not chunks:
+        raise RuntimeError(f"The {label} ZIP contains no supported PDF, HTML, TXT, or CSV files.")
+    return "\n\n".join(chunks)
+
+
+def parse_southwest_lines(text: str, pairing_ids: set[str]) -> list[dict[str, Any]]:
+    lines: list[dict[str, Any]] = []
+    normalized = text.replace("\r", "\n")
+    # Common line identifiers: LINE 123, L123, or a leading numeric/alphanumeric token.
+    headers = list(re.finditer(r"(?im)^\s*(?:LINE\s*#?\s*)?([A-Z]{0,2}\d{1,5})\b[^\n]*$", normalized))
+    for i, match in enumerate(headers):
+        end = headers[i + 1].start() if i + 1 < len(headers) else len(normalized)
+        block = normalized[match.start():end]
+        refs = []
+        for token in re.findall(r"\b[A-Z0-9]{4,6}\b", block.upper()):
+            if token in pairing_ids and token not in refs:
+                refs.append(token)
+        if refs:
+            lines.append({"id": match.group(1).upper(), "pairing_ids": refs, "block": block})
+    if not lines:
+        # Fallback: one record per row containing recognizable pairing IDs.
+        for row_no, row in enumerate(normalized.splitlines(), 1):
+            refs = [token for token in re.findall(r"\b[A-Z0-9]{4,6}\b", row.upper()) if token in pairing_ids]
+            refs = list(dict.fromkeys(refs))
+            if refs:
+                first = re.match(r"\s*([A-Z0-9-]+)", row)
+                lines.append({"id": first.group(1) if first else f"LINE-{row_no}", "pairing_ids": refs, "block": row})
+    # De-duplicate identical line id / pairing combinations.
+    unique = {}
+    for line in lines:
+        unique[(line["id"], tuple(line["pairing_ids"]))] = line
+    return list(unique.values())
+
+
+def score_southwest_line(line: dict[str, Any], pairing_scores: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    members = [pairing_scores[p] for p in line["pairing_ids"] if p in pairing_scores]
+    if not members:
+        raise RuntimeError(f"No pairing details found for Southwest line {line['id']}")
+    cities = list(dict.fromkeys(c for item in members for c in item.get("cities", [])))
+    layovers = []
+    for item in members:
+        for layover in item.get("layovers", []):
+            key = (layover.get("city"), layover.get("duration"))
+            if key not in [(x.get("city"), x.get("duration")) for x in layovers]:
+                layovers.append(layover)
+    reasons = []
+    for item in members:
+        reasons.extend(item.get("reasons", []))
+    credits = [item.get("credit") for item in members if item.get("credit")]
+    return {
+        "pairing": line["id"], "item_type": "line", "score": round(sum(x["score"] for x in members) / len(members), 1),
+        "dates": [], "cities": cities, "preferred_aircraft": sorted(set(a for item in members for a in item.get("preferred_aircraft", []))),
+        "redeye": "flagged" if any(x.get("redeye") != "none" for x in members) else "none",
+        "deadheads": sum(x.get("deadheads", 0) for x in members), "transfers": sorted(set(t for x in members for t in x.get("transfers", []))),
+        "calendar_conflicts": sorted(set(c for x in members for c in x.get("calendar_conflicts", []))),
+        "reasons": [f"Contains pairings: {', '.join(line['pairing_ids'])}"] + list(dict.fromkeys(reasons))[:12],
+        "parser": "southwest_lines", "parser_confidence": min(x.get("parser_confidence", 0) for x in members),
+        "credit": " + ".join(credits) if credits else None, "tafb": None, "checkin": None, "release": None,
+        "layovers": layovers, "legs": [], "soft_credit": None, "pairing_ids": line["pairing_ids"],
+    }
+
+
+def process_job(job_id: str, paths: list[Path], profile: dict[str, Any], airline: str) -> None:
+    work_dir = UPLOAD_DIR / f"{job_id}_work"
     try:
-        update_job(job_id, status="processing", progress=5, message="Opening uploaded file")
-        text = extract_text(path, suffix, job_id)
-        pairings, parser_name = parse_pairings(text, job_id, parser_choice)
-        update_job(job_id, progress=75, message=f"Scoring {len(pairings)} pairings")
-        results = []
-        for i, pairing in enumerate(pairings):
-            results.append(score_pairing(pairing, profile))
-            if i % 25 == 0:
-                update_job(
-                    job_id,
-                    progress=75 + int((i + 1) / max(len(pairings), 1) * 20),
-                    message=f"Scoring pairing {i + 1} of {len(pairings)}",
-                )
+        update_job(job_id, status="processing", progress=5, message="Opening uploaded file(s)")
+        if airline == "southwest":
+            pairings_text = extract_archive_text(paths[0], work_dir / "pairings", job_id, "Pairings")
+            lines_text = extract_archive_text(paths[1], work_dir / "lines", job_id, "Lines")
+            pairings, parser_name = parse_pairings(pairings_text, job_id, "southwest")
+            update_job(job_id, progress=72, message=f"Matching {len(pairings)} pairings to offered lines")
+            scored_pairings = {p["id"]: score_pairing(p, profile) for p in pairings}
+            lines = parse_southwest_lines(lines_text, set(scored_pairings))
+            if not lines:
+                raise RuntimeError("No Southwest lines could be matched to the pairing IDs. Confirm that the correct Pairings and Lines ZIP files were uploaded.")
+            results = [score_southwest_line(line, scored_pairings) for line in lines]
+            item_label = "lines"
+        else:
+            text = extract_text(paths[0], paths[0].suffix.lower(), job_id)
+            pairings, parser_name = parse_pairings(text, job_id, "delta")
+            update_job(job_id, progress=75, message=f"Scoring {len(pairings)} pairings")
+            results = [score_pairing(pairing, profile) for pairing in pairings]
+            item_label = "pairings"
         results.sort(key=lambda item: item["score"], reverse=True)
-        update_job(
-            job_id,
-            status="complete",
-            progress=100,
-            message=f"Complete: {len(results)} pairings ranked with {parser_name} parser",
-            results_json=json.dumps(results[:1000]),
-        )
+        update_job(job_id, status="complete", progress=100, message=f"Complete: {len(results)} {item_label} ranked", results_json=json.dumps(results))
     except Exception as exc:
         log.exception("Job %s failed", job_id)
         update_job(job_id, status="failed", progress=100, error=str(exc), message="Analysis failed")
     finally:
-        try:
+        for path in paths:
             path.unlink(missing_ok=True)
-        except Exception:
-            pass
+        shutil.rmtree(work_dir, ignore_errors=True)
 
 
 @app.post("/api/jobs")
 async def create_job(
     background_tasks: BackgroundTasks,
-    file: UploadFile = File(...),
-    context: str = Form(""),
+    airline: str = Form(...),
     profile_json: str = Form(...),
-    parser_choice: str = Form("auto"),
+    context: str = Form(""),
+    file: UploadFile | None = File(None),
+    pairings_file: UploadFile | None = File(None),
+    lines_file: UploadFile | None = File(None),
 ):
     try:
         profile = json.loads(profile_json)
     except json.JSONDecodeError as exc:
         raise HTTPException(400, "Invalid preference profile") from exc
-
-    suffix = Path(file.filename or "").suffix.lower()
-    if suffix not in {".pdf", ".html", ".htm", ".txt", ".csv"}:
-        raise HTTPException(400, "Supported formats: PDF, HTML, HTM, TXT, CSV")
+    airline = airline.lower().strip()
+    uploads: list[UploadFile]
+    if airline == "delta":
+        if not file:
+            raise HTTPException(400, "Choose a Delta bid package PDF.")
+        if Path(file.filename or "").suffix.lower() != ".pdf":
+            raise HTTPException(400, "Delta requires one PDF bid package.")
+        uploads = [file]
+    elif airline == "southwest":
+        if not pairings_file or not lines_file:
+            raise HTTPException(400, "Southwest requires both the Pairings ZIP and Lines ZIP.")
+        if any(Path(x.filename or "").suffix.lower() != ".zip" for x in (pairings_file, lines_file)):
+            raise HTTPException(400, "Both Southwest files must be ZIP files.")
+        uploads = [pairings_file, lines_file]
+    else:
+        raise HTTPException(400, "That airline is not supported yet.")
 
     job_id = uuid.uuid4().hex
-    path = UPLOAD_DIR / f"{job_id}{suffix}"
-    total = 0
-    with path.open("wb") as out:
-        while chunk := await file.read(1024 * 1024):
-            total += len(chunk)
-            if total > 100 * 1024 * 1024:
-                path.unlink(missing_ok=True)
-                raise HTTPException(413, "File exceeds 100 MB")
-            out.write(chunk)
-
+    paths: list[Path] = []
+    for index, upload in enumerate(uploads):
+        suffix = Path(upload.filename or "").suffix.lower()
+        path = UPLOAD_DIR / f"{job_id}_{index}{suffix}"
+        total = 0
+        with path.open("wb") as out:
+            while chunk := await upload.read(1024 * 1024):
+                total += len(chunk)
+                if total > 100 * 1024 * 1024:
+                    path.unlink(missing_ok=True)
+                    raise HTTPException(413, "A file exceeds 100 MB")
+                out.write(chunk)
+        paths.append(path)
+    filenames = " + ".join(x.filename or "upload" for x in uploads)
     with db() as conn:
-        conn.execute(
-            "INSERT INTO jobs(id,filename,context,status,progress,message) VALUES(?,?,?,?,?,?)",
-            (job_id, file.filename or "upload", context, "queued", 1, "Upload received"),
-        )
-
-    background_tasks.add_task(process_job, job_id, path, suffix, profile, parser_choice)
+        conn.execute("INSERT INTO jobs(id,filename,context,status,progress,message) VALUES(?,?,?,?,?,?)", (job_id, filenames, context, "queued", 1, "Upload received"))
+    background_tasks.add_task(process_job, job_id, paths, profile, airline)
     return {"job_id": job_id, "status": "queued"}
 
 
