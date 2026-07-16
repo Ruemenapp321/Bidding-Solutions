@@ -5,6 +5,9 @@ const activeJobKey = 'crewbidiqActiveJob';
 const draftKey = 'crewbidiqLabsDraft';
 let sessionJob = null;
 let sessionLoading = true;
+let navbluePlan = null;
+let navbluePlanJob = null;
+let navbluePlanError = '';
 
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, character => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
@@ -17,6 +20,19 @@ function readJson(key, fallback = null) {
 
 function airlineName(value) {
   return ({ delta: 'Delta Air Lines', american: 'American Airlines', southwest: 'Southwest Airlines', generic: 'Other airline' })[value] || value || 'Airline unavailable';
+}
+
+function payGoalLabel() {
+  if (sessionJob?.airline === 'southwest') return 'TFP and efficiency';
+  if (sessionJob?.airline === 'delta') return 'Total Pay and efficiency';
+  return 'Trip value and efficiency';
+}
+
+function resultPay(item) {
+  const airline = item.airline || sessionJob?.airline;
+  if (airline === 'southwest') return { label: item.item_type === 'line' ? 'Line TFP' : 'Pairing TFP', value: item.item_type === 'line' ? item.line_tfp : item.pairing_tfp };
+  if (airline === 'delta') return { label: 'Total Pay', value: item.total_pay };
+  return { label: 'Credit', value: item.credit };
 }
 
 function inferredBidMonth(filename = '') {
@@ -79,7 +95,7 @@ function builderPage() {
     <section class="surface labs-builder">
       <div class="surface-title"><div><span class="labs-step">1</span><div><h2>Define your month</h2><p>Start with what matters most. You can refine the details later.</p></div></div><span id="draftStatus" class="draft-status">Draft on this device</span></div>
       <div class="labs-form-grid">
-        <label>Primary goal<select id="labsFocus"><option value="quality">Quality of life</option><option value="days_off">Protect days off</option><option value="layovers">Preferred layovers</option><option value="credit">Credit and efficiency</option><option value="commute">Commute-friendly trips</option></select></label>
+        <label>Primary goal<select id="labsFocus"><option value="quality">Quality of life</option><option value="days_off">Protect days off</option><option value="layovers">Preferred layovers</option><option value="credit">${escapeHtml(payGoalLabel())}</option><option value="commute">Commute-friendly trips</option></select></label>
         <label>Required days off<input id="labsRequiredDays" value="${escapeHtml(value('requiredDays', 'required_days_off'))}" placeholder="8/11, 8/18"></label>
         <label>Preferred trip lengths<input id="labsTripLengths" value="${escapeHtml(value('tripLengths', 'preferred_trip_lengths'))}" placeholder="2, 3, 4"></label>
         <label>Highest-priority layovers<input id="labsLayovers" value="${escapeHtml(value('layovers', 'elite_cities'))}" placeholder="HNL, OGG, LIH"></label>
@@ -106,10 +122,11 @@ function recommendationCards(results) {
   return results.slice(0, 8).map((item, index) => {
     const layovers = (item.layovers || []).map(layover => layover.city).join(', ') || 'No overnights';
     const reasons = (item.reasons || []).slice(0, 3);
+    const pay = resultPay(item);
     return `<article class="labs-recommendation">
       <div class="labs-rank">${index + 1}</div>
       <div><span>${escapeHtml(item.display_label || 'Trip')} ${escapeHtml(item.pairing)}</span><h3>${escapeHtml(layovers)}</h3><p>${reasons.length ? reasons.map(escapeHtml).join(' · ') : 'No strong preference signals were detected.'}</p></div>
-      <div class="labs-recommendation-metrics"><strong>${escapeHtml(matchLabel(item))}</strong><span>${escapeHtml(item.credit || '—')} credit</span></div>
+      <div class="labs-recommendation-metrics"><strong>${escapeHtml(matchLabel(item))}</strong><span>${escapeHtml(pay.value || 'N/A')} ${escapeHtml(pay.label)}</span></div>
     </article>`;
   }).join('');
 }
@@ -149,22 +166,35 @@ function previewPage() {
     <div class="labs-page-actions"><a class="secondary button" href="/labs/build">Set bid priorities</a><a class="primary button" href="/labs/recommendations">View recommendations</a></div>`;
 }
 
+function mergedLabsProfile() {
+  const classic = readJson('crewbidiqProfile', {}) || {};
+  const draft = readJson(draftKey, {}) || {};
+  const split = value => String(value || '').split(',').map(item => item.trim()).filter(Boolean);
+  return {
+    ...classic,
+    required_days_off: draft.requiredDays ? split(draft.requiredDays) : (classic.required_days_off || []),
+    preferred_trip_lengths: draft.tripLengths ? split(draft.tripLengths) : (classic.preferred_trip_lengths || []),
+    elite_cities: draft.layovers ? split(draft.layovers) : (classic.elite_cities || []),
+    penalty_cities: draft.avoidLayovers ? split(draft.avoidLayovers) : (classic.penalty_cities || []),
+    max_legs_per_day: draft.maxLegs || classic.max_legs_per_day,
+    earliest_report: draft.earliestReport || null,
+    latest_release: draft.latestRelease || null
+  };
+}
+
 function planPage() {
   const ready = sessionJob?.status === 'complete';
-  const results = sessionJob?.results || [];
-  const draft = readJson(draftKey, {});
-  const focus = ({ quality: 'Quality of life', days_off: 'Protect days off', layovers: 'Preferred layovers', credit: 'Credit and efficiency', commute: 'Commute-friendly trips' })[draft?.focus] || 'Classic preference ranking';
-  return `${pageHeader('PROPOSED BID PLAN', 'Turn strong trips into a working order', 'Use this pilot-reviewed draft as a starting point, not an automatic airline submission.')}
+  const draft = readJson(draftKey, {}) || {};
+  const focus = ({ quality: 'Quality of life', days_off: 'Protect days off', layovers: 'Preferred layovers', credit: payGoalLabel(), commute: 'Commute-friendly trips' })[draft.focus] || 'Classic preference ranking';
+  const planBody = navbluePlanError ? `<section class="surface labs-feature-empty"><h2>Bid plan could not be generated</h2><p>${escapeHtml(navbluePlanError)}</p><button class="primary" type="button" onclick="window.location.reload()">Try again</button></section>` : !navbluePlan ? `<section class="surface labs-loading"><strong>Building your NavBlue request layers...</strong><p>Translating your saved preferences into an ordered, pilot-reviewable bid.</p></section>` : `<section class="surface bid-plan navblue-plan">
+      <div class="surface-title"><div><div><span class="kicker">NAVBLUE PBS REQUEST PLAN</span><h2>${escapeHtml(focus)}</h2><p>${escapeHtml(navbluePlan.request_count)} ordered requests derived from your Classic preferences and Labs draft.</p></div></div><span class="beta-badge">Draft</span></div>
+      <div class="navblue-layer-list">${navbluePlan.layers.map(layer => `<article class="navblue-layer"><header><span>Layer ${escapeHtml(layer.number)}</span><h3>${escapeHtml(layer.title)}</h3></header><ol>${layer.requests.map(request => `<li><code>${escapeHtml(request.request)}</code><p>${escapeHtml(request.reason)}</p>${request.matching_trip_count !== undefined ? `<small>${escapeHtml(request.matching_trip_count)} parsed trip${request.matching_trip_count === 1 ? '' : 's'} associated with this request</small>` : ''}</li>`).join('')}</ol></article>`).join('')}</div>
+      <div class="labs-plan-note"><strong>Before you submit</strong>${navbluePlan.warnings.map(warning => `<p>${escapeHtml(warning)}</p>`).join('')}</div>
+    </section>`;
+  return `${pageHeader('PROPOSED BID PLAN', 'Build actual NavBlue request layers', 'Review an ordered PBS request strategy—not another list of pairings—and enter it in NavBlue only after pilot verification.')}
     ${packageCard()}
-    ${!ready ? emptyFeature('A proposed plan needs Classic results') : `<section class="surface bid-plan">
-      <div class="surface-title"><div><div><span class="kicker">PLAN FOCUS</span><h2>${escapeHtml(focus)}</h2><p>Built from the top recommendations currently available in this browser session.</p></div></div><span class="beta-badge">Draft</span></div>
-      <ol class="bid-plan-list">${results.slice(0, 10).map((item, index) => {
-        const layovers = (item.layovers || []).map(layover => layover.city).join(', ') || 'No overnights';
-        return `<li><span>${index + 1}</span><div><strong>${escapeHtml(item.display_label || 'Trip')} ${escapeHtml(item.pairing)}</strong><small>${escapeHtml(layovers)} · ${escapeHtml(item.credit || '—')} credit</small></div><em>${escapeHtml(matchLabel(item))}</em></li>`;
-      }).join('')}</ol>
-      <div class="labs-plan-note"><strong>Before you submit</strong><p>Confirm dates, report times, legality, and airline-specific bidding rules against the original bid package.</p></div>
-    </section>`}
-    <div class="labs-page-actions"><a class="secondary button" href="/labs/recommendations">Review recommendations</a><a class="text-button button" href="/">Return to Classic</a></div>`;
+    ${!ready ? emptyFeature('A proposed plan needs Classic results') : planBody}
+    <div class="labs-page-actions"><a class="secondary button" href="/labs/recommendations">Review supporting pairings</a><a class="text-button button" href="/">Return to Classic</a></div>`;
 }
 
 function render() {
@@ -201,6 +231,27 @@ function bindBuilder() {
   });
 }
 
+async function loadNavbluePlan(jobId) {
+  if (!jobId || navbluePlanJob === jobId) return;
+  navbluePlanJob = jobId;
+  navbluePlan = null;
+  navbluePlanError = '';
+  render();
+  try {
+    const response = await fetch(`/api/jobs/${jobId}/navblue-plan`, {
+      method: 'POST',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+      body: JSON.stringify(mergedLabsProfile())
+    });
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.detail || 'Could not build the NavBlue request plan');
+    navbluePlan = body;
+  } catch (error) {
+    navbluePlanError = error.message || 'Could not build the NavBlue request plan';
+  }
+  render();
+}
+
 async function loadSharedSession() {
   const jobId = currentJobId();
   if (!jobId) { sessionLoading = false; render(); return; }
@@ -214,6 +265,7 @@ async function loadSharedSession() {
     }
     sessionLoading = false;
     render();
+    if (labsPage === 'plan' && sessionJob.status === 'complete') loadNavbluePlan(jobId);
     if (sessionJob.status === 'queued' || sessionJob.status === 'processing') setTimeout(loadSharedSession, 2000);
   } catch (_) {
     if (localStorage.getItem(latestJobKey) === jobId) localStorage.removeItem(latestJobKey);
