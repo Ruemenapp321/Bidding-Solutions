@@ -177,7 +177,7 @@ INDEX_HTML = r"""
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#071525">
   <title>CrewBidIQ</title>
-  <link rel="stylesheet" href="/static/app.css?v=0423">
+  <link rel="stylesheet" href="/static/app.css?v=0424">
 </head>
 <body data-classic-page="__CLASSIC_PAGE__">
 <div class="app-shell">
