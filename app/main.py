@@ -83,28 +83,131 @@ def get_job(job_id: str):
 
 INDEX_HTML = r"""
 <!doctype html>
-<html lang="en" data-theme="system"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#071525"><title>CrewBidIQ</title><link rel="stylesheet" href="/static/app.css"></head>
+<html lang="en" data-theme="system">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#071525">
+  <title>CrewBidIQ</title>
+  <link rel="stylesheet" href="/static/app.css?v=0231">
+</head>
 <body>
-<header class="app-header"><div class="header-inner"><div class="brand-lockup"><div class="brand-mark">CIQ</div><div><h1>CrewBidIQ</h1><p>Smarter rotation and pairing analysis.</p></div></div><div class="header-actions"><select id="themeChoice" aria-label="Appearance"><option value="system">System</option><option value="dark">Dark</option><option value="light">Light</option></select><button id="guideBtn" class="icon-button">Guide</button></div></div></header>
-<main>
-<section class="hero"><div><span class="eyebrow">CREWBIDIQ v0.2.2</span><h2>Find the trips that fit your life.</h2><p>Upload a bid package, set your priorities, and review airline-aware recommendations in a clean mobile-first ranked list.</p></div><div class="hero-badges"><span>Classic Analyzer</span><span>AI Bid Assistant · Coming later</span></div></section>
-<section class="panel"><div class="panel-heading"><div><span class="step">1</span><h2>Upload bid package</h2></div><p>Delta uses “rotations.” Other airlines display their own terminology.</p></div><div class="field-grid one-line"><label>Airline<select id="airlineChoice"><option value="delta">Delta Air Lines</option><option value="southwest">Southwest Airlines</option><option value="american">American Airlines</option><option value="generic">Other airline / generic PDF</option></select></label></div>
-<div id="pdfUploads" class="upload-box"><strong>Upload one PDF</strong><span>Used for Delta, American, and most other airlines.</span><input id="pdfFile" type="file" accept=".pdf,application/pdf"></div>
-<div id="southwestUploads" class="upload-box hidden"><strong>Southwest upload</strong><span>Use one ZIP containing Lines + Pairings, or two separate TXT files.</span><input id="southwestZip" type="file" accept=".zip,application/zip"><div class="or">or</div><div class="field-grid"><label>Pairings TXT<input id="southwestPairingsFile" type="file" accept=".txt,text/plain"></label><label>Lines TXT<input id="southwestLinesFile" type="file" accept=".txt,text/plain"></label></div></div>
-<div class="button-row"><button id="analyzeBtn" class="primary">Analyze</button><button id="demoBtn" class="secondary">Load sample</button></div><div id="jobPanel" class="job-panel hidden"><div class="job-row"><strong id="jobStatus">Preparing…</strong><span id="jobPercent">0%</span></div><div class="progress"><div id="progressFill"></div></div><div id="jobMessage" class="muted"></div></div><div id="errorBox" class="error hidden"></div></section>
-<section class="panel"><div class="panel-heading"><div><span class="step">2</span><h2>Your preferences</h2></div><button id="saveProfileBtn" class="text-button">Save on this device</button></div>
-<div class="field-grid"><label>Highest-priority layovers<input id="eliteCities" placeholder="SAN, HNL, BOS"></label><label>Preferred layovers<input id="secondaryCities" placeholder="SEA, PDX, MIA"></label><label>Avoid layovers<input id="penaltyCities" placeholder="DFW, IAH"></label><label>Preferred trip lengths<input id="preferredTripLengths" placeholder="2,3,4"></label><label>Earliest report<input id="earliestReport" type="time"></label><label>Latest release<input id="latestRelease" type="time"></label><label>Maximum legs any duty day<input id="maxLegsPerDay" type="number" min="1" placeholder="3"></label><label>Maximum first-day legs<input id="maxFirstDayLegs" type="number" min="1" placeholder="2"></label><label>Maximum last-day legs<input id="maxLastDayLegs" type="number" min="1" placeholder="2"></label><label>Maximum legs after redeye rest<input id="maxLegsAfterRedeye" type="number" min="0" placeholder="2"></label><label>Minimum layover hours<input id="minLayoverHours" type="number" min="0" placeholder="12"></label><label>Maximum deadheads<input id="maxDeadheads" type="number" min="0" placeholder="1"></label></div>
-<div class="toggle-grid"><label><input id="preferWeekendsOff" type="checkbox"><span>Prefer weekends off</span></label><label><input id="avoidHolidays" type="checkbox"><span>Avoid listed holidays</span></label><label><input id="workHolidays" type="checkbox"><span>Prefer working holidays</span></label><label><input id="allowRedeyeStart" type="checkbox"><span>Allow redeye starts</span></label><label><input id="allowMidRotationRedeye" type="checkbox"><span>Allow mid-rotation redeyes</span></label><label><input id="avoidFinalRedeye" type="checkbox"><span>Avoid final-day redeyes</span></label></div>
-<details class="advanced"><summary>Advanced calendar and scoring controls</summary><div class="field-grid"><label>Required days off<textarea id="requiredDaysOff" placeholder="YYYY-MM-DD, separated by commas"></textarea></label><label>Preferred days off<textarea id="preferredDaysOff" placeholder="YYYY-MM-DD, separated by commas"></textarea></label><label>Holidays / special dates<textarea id="holidayDates" placeholder="YYYY-MM-DD, separated by commas"></textarea></label><label>Preferred weekdays off<input id="preferredWeekdays" placeholder="SAT,SUN"></label><label>Preferred aircraft codes<input id="preferredAircraft" placeholder="NEO,321"></label><label>Maximum transfers<input id="maxTransfers" type="number" min="0" placeholder="0"></label></div><input id="smallCities" type="hidden"><input id="maxConsecutiveWorkDays" type="hidden"><input id="minConsecutiveDaysOff" type="hidden"><input id="avoidReserve" type="hidden"><input id="preferOperate" type="hidden"><div class="hidden-weight-fields"><input id="wElite" type="hidden" value="28"><input id="wSecondary" type="hidden" value="12"><input id="wSmall" type="hidden" value="6"><input id="wPenalty" type="hidden" value="18"><input id="wAircraft" type="hidden" value="20"><input id="wPure" type="hidden" value="65"><input id="wTransfer" type="hidden" value="32"><input id="wDeadhead" type="hidden" value="18"><input id="wRequiredConflict" type="hidden" value="500"><input id="wPreferredConflict" type="hidden" value="35"><input id="wHolidayConflict" type="hidden" value="60"><input id="wEarlyReport" type="hidden" value="20"><input id="wLateRelease" type="hidden" value="20"></div></details></section>
-<section class="panel results-panel"><div class="panel-heading"><div><span class="step">3</span><h2 id="resultsTitle">Recommended rotations</h2><p id="summary">No analysis yet.</p></div><div class="results-actions"><select id="resultLimit"><option value="25">Top 25</option><option value="50">Top 50</option><option value="100">Top 100</option><option value="all">All</option></select><a id="csvLink" class="secondary button disabled" href="#">CSV</a></div></div><div id="results" class="ranked-list"><div class="empty-state">Your ranked results will appear here.</div></div></section>
-<section id="guide" class="panel guide-panel hidden"><div class="panel-heading"><div><span class="step">?</span><h2>Comprehensive User Guide</h2></div><button id="closeGuideBtn" class="text-button">Close</button></div>
-<h3>Core terminology</h3><p><strong>Rotation (Delta):</strong> Delta’s term for a complete trip sequence beginning and ending at base. <strong>Pairing:</strong> the equivalent term used by many other airlines. CrewBidIQ automatically changes the label by airline.</p><p><strong>Duty day:</strong> one continuous period of assigned work within a rotation or pairing. <strong>Duty leg:</strong> an operating flight segment during a duty day. Deadheads are shown separately and are not automatically counted as working legs.</p>
-<h3>Match ratings</h3><p><strong>Excellent Match</strong> closely follows your selected preferences. <strong>Strong Match</strong> has several important positives with limited tradeoffs. <strong>Good Match</strong> is generally favorable but has meaningful compromises. <strong>Fair Match</strong> has mixed alignment. <strong>Low Match</strong> conflicts with several priorities. Ratings are relative to the other trips in the uploaded package—not a universal judgment of trip quality.</p>
-<h3>Leg metrics</h3><p><strong>Legs by day</strong> lists working legs in each duty period, such as 2 · 3 · 1. <strong>First-day legs</strong> and <strong>last-day legs</strong> help commuters identify easy opening and closing days. <strong>Post-redeye legs</strong> describes the work scheduled after the required rest following a redeye.</p>
-<h3>Redeyes</h3><p><strong>Redeye start:</strong> a rotation or pairing that begins with an overnight flight. <strong>Mid-rotation redeye:</strong> a redeye occurring before the final duty period. <strong>Final-day redeye:</strong> a redeye that finishes the trip. <strong>Recovery quality:</strong> a plain-language evaluation based on the number of legs and workload after rest.</p>
-<h3>Results</h3><p><strong>Rank:</strong> order after applying your preferences. <strong>Credit:</strong> credited pay time shown in the bid package. <strong>TAFB:</strong> time away from base. <strong>Conflicts:</strong> dates or limits that violate a stated preference. <strong>Why this matches:</strong> the strongest positive and negative factors affecting ranking. <strong>Soft credit:</strong> Delta-only EDP, HOL, and SIT when detected; otherwise N/A.</p>
-<h3>Storage and limitations</h3><p>Saved preferences remain in the current browser only. Uploaded files are processed by the CrewBidIQ server and are deleted after processing. Bid-package formats can change; always verify critical information against the airline’s original material.</p></section>
-</main><script src="/static/app.js"></script></body></html>
+<div class="app-shell">
+  <aside class="desktop-sidebar">
+    <div class="side-brand"><span class="wing">✈</span><strong>CrewBid<span>IQ</span></strong></div>
+    <nav>
+      <a href="#upload" class="nav-link active">⌂ <span>Home</span></a>
+      <a href="#upload" class="nav-link">⇧ <span>Upload</span></a>
+      <a href="#resultsPanel" class="nav-link">▥ <span>Results</span></a>
+      <a href="#preferences" class="nav-link">⚙ <span>Preferences</span></a>
+      <button id="guideBtn" class="nav-link nav-button">? <span>User Guide</span></button>
+    </nav>
+    <div class="side-footer">CrewBidIQ v0.2.3 test</div>
+  </aside>
+
+  <div class="app-main">
+    <header class="mobile-header">
+      <div class="brand-word">CrewBid<span>IQ</span></div>
+      <div class="header-controls">
+        <select id="themeChoice" aria-label="Appearance"><option value="system">System</option><option value="dark">Dark</option><option value="light">Light</option></select>
+        <button id="mobileGuideBtn" class="round-button" aria-label="Open guide">?</button>
+      </div>
+    </header>
+
+    <main>
+      <section class="welcome" id="upload">
+        <div>
+          <span class="kicker">CLASSIC ANALYZER</span>
+          <h1>Find the rotations that fit your life.</h1>
+          <p>Upload your bid package, choose what matters, and see a clean ranked list built around your preferences.</p>
+        </div>
+        <div class="welcome-badge"><span>✦</span><strong>Mobile-first</strong><small>Built for quick scanning</small></div>
+      </section>
+
+      <section class="surface upload-surface">
+        <div class="surface-title"><div><span class="section-number">1</span><h2>Upload bid package</h2></div><p>PDF for most airlines. Southwest accepts one ZIP or two TXT files.</p></div>
+        <div class="upload-layout">
+          <label class="select-field">Airline<select id="airlineChoice"><option value="delta">Delta Air Lines</option><option value="southwest">Southwest Airlines</option><option value="american">American Airlines</option><option value="generic">Other airline / generic PDF</option></select></label>
+          <div id="pdfUploads" class="drop-zone"><div class="upload-icon">⇧</div><strong>Choose bid-package PDF</strong><span>Tap to select a file</span><input id="pdfFile" type="file" accept=".pdf,application/pdf"></div>
+          <div id="southwestUploads" class="drop-zone hidden"><div class="upload-icon">⇧</div><strong>Southwest files</strong><span>One ZIP with Lines + Pairings, or both TXT files</span><input id="southwestZip" type="file" accept=".zip,application/zip"><div class="or">OR</div><div class="sw-files"><label>Pairings TXT<input id="southwestPairingsFile" type="file" accept=".txt,text/plain"></label><label>Lines TXT<input id="southwestLinesFile" type="file" accept=".txt,text/plain"></label></div></div>
+        </div>
+        <div class="primary-actions"><button id="analyzeBtn" class="primary">Analyze bid package</button><button id="demoBtn" class="secondary">View sample results</button></div>
+        <div id="jobPanel" class="job-panel hidden"><div class="job-row"><strong id="jobStatus">Preparing…</strong><span id="jobPercent">0%</span></div><div class="progress"><div id="progressFill"></div></div><div id="jobMessage" class="muted"></div></div>
+        <div id="errorBox" class="error hidden"></div>
+      </section>
+
+      <section class="surface" id="preferences">
+        <div class="surface-title"><div><span class="section-number">2</span><h2>Your preferences</h2></div><button id="saveProfileBtn" class="text-button">Save on this device</button></div>
+        <div class="preference-grid">
+          <label>Highest-priority layovers<input id="eliteCities" placeholder="SAN, HNL, BOS"></label>
+          <label>Preferred layovers<input id="secondaryCities" placeholder="SEA, PDX, MIA"></label>
+          <label>Avoid layovers<input id="penaltyCities" placeholder="DFW, IAH"></label>
+          <label>Preferred trip lengths<input id="preferredTripLengths" placeholder="2, 3, 4"></label>
+          <label>Earliest report<input id="earliestReport" type="time"></label>
+          <label>Latest release<input id="latestRelease" type="time"></label>
+        </div>
+        <div class="preference-chips">
+          <label><input id="preferWeekendsOff" type="checkbox"><span>Weekends off</span></label>
+          <label><input id="avoidHolidays" type="checkbox"><span>Avoid holidays</span></label>
+          <label><input id="workHolidays" type="checkbox"><span>Work holidays</span></label>
+          <label><input id="allowRedeyeStart" type="checkbox"><span>Allow redeye starts</span></label>
+          <label><input id="allowMidRotationRedeye" type="checkbox"><span>Allow mid-rotation redeyes</span></label>
+          <label><input id="avoidFinalRedeye" type="checkbox"><span>Avoid final redeyes</span></label>
+        </div>
+        <details class="advanced"><summary>Advanced duty preferences</summary>
+          <div class="preference-grid">
+            <label>Maximum legs any duty day<input id="maxLegsPerDay" type="number" min="1" placeholder="3"></label>
+            <label>Maximum first-day legs<input id="maxFirstDayLegs" type="number" min="1" placeholder="2"></label>
+            <label>Maximum last-day legs<input id="maxLastDayLegs" type="number" min="1" placeholder="2"></label>
+            <label>Maximum legs after redeye rest<input id="maxLegsAfterRedeye" type="number" min="0" placeholder="2"></label>
+            <label>Minimum layover hours<input id="minLayoverHours" type="number" min="0" placeholder="12"></label>
+            <label>Maximum deadheads<input id="maxDeadheads" type="number" min="0" placeholder="1"></label>
+            <label>Required days off<textarea id="requiredDaysOff" placeholder="YYYY-MM-DD, separated by commas"></textarea></label>
+            <label>Preferred days off<textarea id="preferredDaysOff" placeholder="YYYY-MM-DD, separated by commas"></textarea></label>
+            <label>Holidays / special dates<textarea id="holidayDates" placeholder="YYYY-MM-DD, separated by commas"></textarea></label>
+            <label>Preferred weekdays off<input id="preferredWeekdays" placeholder="SAT,SUN"></label>
+            <label>Preferred aircraft codes<input id="preferredAircraft" placeholder="NEO,321"></label>
+            <label>Maximum transfers<input id="maxTransfers" type="number" min="0" placeholder="0"></label>
+          </div>
+        </details>
+        <input id="smallCities" type="hidden"><input id="maxConsecutiveWorkDays" type="hidden"><input id="minConsecutiveDaysOff" type="hidden"><input id="avoidReserve" type="hidden"><input id="preferOperate" type="hidden">
+        <div class="hidden-weight-fields"><input id="wElite" type="hidden" value="28"><input id="wSecondary" type="hidden" value="12"><input id="wSmall" type="hidden" value="6"><input id="wPenalty" type="hidden" value="18"><input id="wAircraft" type="hidden" value="20"><input id="wPure" type="hidden" value="65"><input id="wTransfer" type="hidden" value="32"><input id="wDeadhead" type="hidden" value="18"><input id="wRequiredConflict" type="hidden" value="500"><input id="wPreferredConflict" type="hidden" value="35"><input id="wHolidayConflict" type="hidden" value="60"><input id="wEarlyReport" type="hidden" value="20"><input id="wLateRelease" type="hidden" value="20"></div>
+      </section>
+
+      <section class="results-section" id="resultsPanel">
+        <div class="results-header">
+          <div><span class="kicker">YOUR RESULTS</span><h2 id="resultsTitle">Recommended rotations</h2><p id="summary">Load sample results or analyze a bid package.</p></div>
+          <div class="results-actions"><select id="resultLimit"><option value="25">Top 25</option><option value="50">Top 50</option><option value="100">Top 100</option><option value="all">All</option></select><a id="csvLink" class="secondary button disabled" href="#">CSV</a></div>
+        </div>
+        <div class="snapshot" id="snapshot">
+          <div><span>Top match</span><strong id="snapshotMatch">—</strong></div>
+          <div><span>Credit</span><strong id="snapshotCredit">—</strong></div>
+          <div><span>Trip length</span><strong id="snapshotLength">—</strong></div>
+          <div><span>Recovery</span><strong id="snapshotRecovery">—</strong></div>
+        </div>
+        <div id="results" class="ranked-list"><div class="empty-state"><span>✈</span><strong>No results yet</strong><p>Your ranked rotations will appear here.</p></div></div>
+      </section>
+
+      <section id="guide" class="surface guide-panel hidden">
+        <div class="surface-title"><div><span class="section-number">?</span><h2>Complete User Guide</h2></div><button id="closeGuideBtn" class="text-button">Close</button></div>
+        <h3>Airline terminology</h3><p><strong>Rotation:</strong> Delta’s term for a complete trip sequence. <strong>Pairing:</strong> the term used by many other airlines. CrewBidIQ changes labels automatically.</p>
+        <h3>Match ratings</h3><p><strong>Excellent, Strong, Good, Fair, and Low Match</strong> describe how closely a rotation follows your selected preferences. The hidden numerical score only determines rank.</p>
+        <h3>Duty legs</h3><p><strong>Legs by day</strong> shows working flight segments in each duty period. <strong>First-day legs</strong>, <strong>last-day legs</strong>, and <strong>legs after redeye rest</strong> identify demanding duty patterns.</p>
+        <h3>Redeyes</h3><p><strong>Redeye start</strong> begins the trip overnight. <strong>Mid-rotation redeye</strong> occurs before the final duty period. Recovery describes the duty workload after required rest.</p>
+        <h3>Conflicts</h3><p>A conflict is any required day off, preferred day off, holiday, time limit, or duty limit that the rotation violates.</p>
+        <h3>Soft credit</h3><p>Delta displays EDP, HOL, and SIT when detected. Other airlines display N/A until airline-specific rules are defined.</p>
+        <h3>Storage</h3><p>Preferences are saved only in this browser. Uploaded files are processed by the server and should always be verified against the original airline bid package.</p>
+      </section>
+    </main>
+
+    <nav class="bottom-nav">
+      <a href="#upload"><span>⌂</span>Home</a><a href="#upload"><span>⇧</span>Upload</a><a href="#resultsPanel" class="active"><span>▥</span>Results</a><a href="#preferences"><span>⚙</span>Preferences</a>
+    </nav>
+  </div>
+</div>
+<script src="/static/app.js?v=0231"></script>
+<script>document.getElementById('mobileGuideBtn').addEventListener('click',()=>document.getElementById('guideBtn').click());</script>
+</body></html>
 """
 
 @app.get("/", response_class=HTMLResponse)

@@ -1,0 +1,17 @@
+CREWBIDIQ CLEAN REPOSITORY ROOT
+
+Copy every item in this folder directly into the TOP LEVEL of the CrewBidIQ GitHub repository.
+
+The repository root should show these items directly:
+- app/
+- tests/
+- data/
+- .gitignore
+- Dockerfile
+- render.yaml
+- requirements.txt
+- README.md
+
+Do not copy the containing folder into the repository.
+Do not leave older CrewBidIQ_v0.x.x folders at the repository root.
+Replace or merge the existing root-level files when prompted, then commit and push.
