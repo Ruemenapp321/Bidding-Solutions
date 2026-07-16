@@ -9,8 +9,31 @@ function terminology(){const a=$('airlineChoice').value;if(a==='delta')return{si
 function updateAirlineUI(){const sw=$('airlineChoice').value==='southwest';$('pdfUploads').classList.toggle('hidden',sw);$('southwestUploads').classList.toggle('hidden',!sw);$('resultsTitle').textContent=terminology().title}
 function setTheme(v){document.documentElement.dataset.theme=v;localStorage.setItem('crewbidiqTheme',v);$('themeChoice').value=v}
 $('themeChoice').addEventListener('change',e=>setTheme(e.target.value));setTheme(localStorage.getItem('crewbidiqTheme')||'system');$('airlineChoice').addEventListener('change',updateAirlineUI);updateAirlineUI();applySaved();
-$('analyzeBtn').addEventListener('click',async()=>{clearError();const airline=$('airlineChoice').value,data=new FormData();data.append('airline',airline);data.append('context',airline);data.append('profile_json',JSON.stringify(profile()));if(airline==='southwest'){const z=$('southwestZip').files[0],p=$('southwestPairingsFile').files[0],l=$('southwestLinesFile').files[0];if(z&&(p||l))return showError('Choose either one ZIP or the two text files, not both.');if(z)data.append('file',z);else if(p&&l){data.append('pairings_file',p);data.append('lines_file',l)}else return showError('Upload one ZIP containing Lines and Pairings, or both text files.')}else{const f=$('pdfFile').files[0];if(!f)return showError('Choose a bid-package PDF.');data.append('file',f)}$('analyzeBtn').disabled=true;setJob(true,'Uploading',1,'Sending files to CrewBidIQ');try{const r=await fetch('/api/jobs',{method:'POST',body:data}),b=await r.json();if(!r.ok)throw new Error(b.detail||'Upload failed');activeJob=b.job_id;pollTimer=setInterval(pollJob,1500);await pollJob()}catch(e){showError(e.message);setJob(false);$('analyzeBtn').disabled=false}})
-async function pollJob(){if(!activeJob)return;try{const r=await fetch(`/api/jobs/${activeJob}`),b=await r.json();if(!r.ok)throw new Error(b.detail||'Could not read job status');setJob(true,b.status,b.progress,b.message||'');if(b.status==='complete'){clearInterval(pollTimer);$('analyzeBtn').disabled=false;allResults=b.results||[];render();$('csvLink').href=`/api/jobs/${activeJob}/csv`;$('csvLink').classList.remove('disabled')}else if(b.status==='failed'){clearInterval(pollTimer);$('analyzeBtn').disabled=false;showError(b.error||'Analysis failed')}}catch(e){clearInterval(pollTimer);$('analyzeBtn').disabled=false;showError(e.message)}}
+function showChosenFile(inputId,labelId){const input=$(inputId),label=$(labelId);if(!input||!label)return;input.addEventListener('change',()=>{label.textContent=input.files&&input.files[0]?input.files[0].name:'No file selected'})}
+showChosenFile('pdfFile','pdfFileName');showChosenFile('southwestZip','southwestZipName');
+$('analyzeBtn').addEventListener('click',async()=>{
+  clearError();
+  const airline=$('airlineChoice').value,data=new FormData();
+  data.append('airline',airline);data.append('context',airline);data.append('profile_json',JSON.stringify(profile()));
+  if(airline==='southwest'){
+    const z=$('southwestZip').files[0],p=$('southwestPairingsFile').files[0],l=$('southwestLinesFile').files[0],s=$('southwestSeniorityFile')?.files[0],c=$('southwestCoverFile')?.files[0];
+    if(z&&(p||l||s||c))return showError('Choose either the Southwest ZIP or individual text files, not both.');
+    if(z)data.append('file',z);
+    else if(p&&l){data.append('pairings_file',p);data.append('lines_file',l);if(s)data.append('seniority_file',s);if(c)data.append('cover_file',c)}
+    else return showError('Choose the Southwest ZIP, or at least the Pairings and Lines text files.');
+  }else{
+    const f=$('pdfFile').files[0];if(!f)return showError('Choose a bid-package PDF.');data.append('file',f)
+  }
+  const button=$('analyzeBtn');button.disabled=true;button.textContent='Uploading…';setJob(true,'Uploading',1,'Sending files to CrewBidIQ');
+  try{
+    const r=await fetch('/api/jobs',{method:'POST',body:data,headers:{'Accept':'application/json'}});
+    const text=await r.text();let b={};try{b=text?JSON.parse(text):{}}catch{throw new Error(`Upload failed (${r.status}). The server returned an invalid response.`)}
+    if(!r.ok)throw new Error(b.detail||b.error||`Upload failed (${r.status})`);
+    if(!b.job_id)throw new Error('Upload completed, but no analysis job was created.');
+    activeJob=b.job_id;clearInterval(pollTimer);pollTimer=setInterval(pollJob,1500);await pollJob();
+  }catch(e){showError(e.message||'Upload failed');setJob(false);button.disabled=false;button.textContent='Analyze bid package'}
+})
+async function pollJob(){if(!activeJob)return;try{const r=await fetch(`/api/jobs/${activeJob}`),b=await r.json();if(!r.ok)throw new Error(b.detail||'Could not read job status');setJob(true,b.status,b.progress,b.message||'');if(b.status==='complete'){clearInterval(pollTimer);$('analyzeBtn').disabled=false;$('analyzeBtn').textContent='Analyze bid package';allResults=b.results||[];render();$('csvLink').href=`/api/jobs/${activeJob}/csv`;$('csvLink').classList.remove('disabled')}else if(b.status==='failed'){clearInterval(pollTimer);$('analyzeBtn').disabled=false;$('analyzeBtn').textContent='Analyze bid package';showError(b.error||'Analysis failed')}}catch(e){clearInterval(pollTimer);$('analyzeBtn').disabled=false;$('analyzeBtn').textContent='Analyze bid package';showError(e.message)}}
 function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function rating(item,index,total){if(total<=1)return['Excellent Match','excellent'];const pct=1-index/(total-1);if(pct>=.8)return['Excellent Match','excellent'];if(pct>=.6)return['Strong Match','strong'];if(pct>=.4)return['Good Match','good'];if(pct>=.2)return['Fair Match','fair'];return['Low Match','low']}
 function recovery(item){if(!item.redeye||item.redeye==='none')return['No redeye','neutral'];const counts=item.duty_legs||[];const max=Math.max(...counts,0);if(max<=1)return['Easy recovery','excellent'];if(max===2)return['Moderate recovery','strong'];if(max===3)return['Heavy recovery','fair'];return['Demanding recovery','low']}

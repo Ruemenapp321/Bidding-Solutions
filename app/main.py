@@ -128,8 +128,8 @@ INDEX_HTML = r"""
         <div class="surface-title"><div><span class="section-number">1</span><h2>Upload bid package</h2></div><p>PDF for most airlines. Southwest accepts one ZIP or two TXT files.</p></div>
         <div class="upload-layout">
           <label class="select-field">Airline<select id="airlineChoice"><option value="delta">Delta Air Lines</option><option value="southwest">Southwest Airlines</option><option value="american">American Airlines</option><option value="generic">Other airline / generic PDF</option></select></label>
-          <div id="pdfUploads" class="drop-zone"><div class="upload-icon">⇧</div><strong>Choose bid-package PDF</strong><span>Tap to select a file</span><input id="pdfFile" type="file" accept=".pdf,application/pdf"></div>
-          <div id="southwestUploads" class="drop-zone hidden"><div class="upload-icon">⇧</div><strong>Southwest files</strong><span>One ZIP with Lines + Pairings, or both TXT files</span><input id="southwestZip" type="file" accept=".zip,application/zip"><div class="or">OR</div><div class="sw-files"><label>Pairings TXT<input id="southwestPairingsFile" type="file" accept=".txt,text/plain"></label><label>Lines TXT<input id="southwestLinesFile" type="file" accept=".txt,text/plain"></label></div></div>
+          <div id="pdfUploads" class="drop-zone"><div class="upload-icon">⇧</div><strong>Choose bid-package PDF</strong><span id="pdfFileName">No file selected</span><label class="file-picker" for="pdfFile">Browse files</label><input id="pdfFile" class="native-file-input" type="file" accept=".pdf,application/pdf"></div>
+          <div id="southwestUploads" class="drop-zone hidden"><div class="upload-icon">⇧</div><strong>Southwest bid package</strong><span id="southwestZipName">Upload the airline ZIP, or individual TXT files</span><label class="file-picker" for="southwestZip">Choose ZIP</label><input id="southwestZip" class="native-file-input" type="file" accept=".zip,application/zip"><div class="or">OR</div><div class="sw-files"><label>Pairings TXT<input id="southwestPairingsFile" type="file" accept=".txt,text/plain"></label><label>Lines TXT<input id="southwestLinesFile" type="file" accept=".txt,text/plain"></label><label>Seniority TXT<input id="southwestSeniorityFile" type="file" accept=".txt,text/plain"></label><label>Cover TXT<input id="southwestCoverFile" type="file" accept=".txt,text/plain"></label></div></div>
         </div>
         <div class="primary-actions"><button id="analyzeBtn" class="primary">Analyze bid package</button><button id="demoBtn" class="secondary">View sample results</button></div>
         <div id="jobPanel" class="job-panel hidden"><div class="job-row"><strong id="jobStatus">Preparing…</strong><span id="jobPercent">0%</span></div><div class="progress"><div id="progressFill"></div></div><div id="jobMessage" class="muted"></div></div>
@@ -571,9 +571,13 @@ def process_job(job_id: str, paths: list[Path], profile: dict[str, Any], airline
                         if Path(name).suffix.lower() not in {".txt", ".csv", ".html", ".htm"}:
                             continue
                         raw = archive.read(member).decode("utf-8", errors="ignore")
-                        if "pair" in name:
+                        stem = Path(name).stem.upper()
+                        # Southwest airline packages commonly use compact names such as
+                        # LAXFOP.TXT (pairings), LAXFOL.TXT (lines), LAXFOS.TXT
+                        # (seniority), and LAXFOC.TXT (cover).
+                        if "PAIR" in stem or stem.endswith("P"):
                             pairing_chunks.append(raw)
-                        elif "line" in name:
+                        elif "LINE" in stem or stem.endswith("L"):
                             line_chunks.append(raw)
                     if not pairing_chunks or not line_chunks:
                         raise RuntimeError("The Southwest ZIP must contain both a Pairings file and a Lines file.")
@@ -616,6 +620,8 @@ async def create_job(
     file: UploadFile | None = File(None),
     pairings_file: UploadFile | None = File(None),
     lines_file: UploadFile | None = File(None),
+    seniority_file: UploadFile | None = File(None),
+    cover_file: UploadFile | None = File(None),
 ):
     try:
         profile = json.loads(profile_json)
@@ -629,11 +635,12 @@ async def create_job(
                 raise HTTPException(400, "Southwest combined upload must be one ZIP containing Lines and Pairings.")
             uploads = [file]
         elif pairings_file and lines_file:
-            if any(Path(x.filename or "").suffix.lower() != ".txt" for x in (pairings_file, lines_file)):
-                raise HTTPException(400, "Southwest individual uploads must be two text files.")
-            uploads = [pairings_file, lines_file]
+            optional_uploads = [x for x in (seniority_file, cover_file) if x is not None]
+            if any(Path(x.filename or "").suffix.lower() != ".txt" for x in (pairings_file, lines_file, *optional_uploads)):
+                raise HTTPException(400, "Southwest individual uploads must be text files.")
+            uploads = [pairings_file, lines_file, *optional_uploads]
         else:
-            raise HTTPException(400, "Upload one Southwest ZIP, or both the Pairings and Lines text files.")
+            raise HTTPException(400, "Upload one Southwest ZIP, or at least the Pairings and Lines text files.")
     elif airline in {"delta", "american", "generic"}:
         if not file:
             raise HTTPException(400, "Choose a bid-package PDF.")
