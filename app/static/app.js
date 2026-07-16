@@ -1,5 +1,6 @@
 const $ = id => document.getElementById(id);
 let activeJob = localStorage.getItem('crewbidiqActiveJob');
+let latestJob = localStorage.getItem('crewbidiqLatestJob');
 let pollTimer = null;
 let pollFailures = 0;
 let allResults = [];
@@ -60,7 +61,7 @@ async function pollJob() {
   try {
     const response = await fetch(`/api/jobs/${activeJob}`, { headers: { Accept: 'application/json' } }); const body = await response.json(); if (!response.ok) throw new Error(body.detail || 'Could not read job status');
     pollFailures = 0; setJob(true, body.status, body.progress, body.message || '');
-    if (body.status === 'complete') { clearInterval(pollTimer); localStorage.removeItem('crewbidiqActiveJob'); $('analyzeBtn').disabled = false; $('analyzeBtn').textContent = 'Analyze bid package'; allResults = body.results || []; render(); $('csvLink').href = `/api/jobs/${activeJob}/report.pdf`; $('csvLink').classList.remove('disabled'); }
+    if (body.status === 'complete') { clearInterval(pollTimer); localStorage.removeItem('crewbidiqActiveJob'); latestJob = activeJob; localStorage.setItem('crewbidiqLatestJob', latestJob); $('analyzeBtn').disabled = false; $('analyzeBtn').textContent = 'Analyze bid package'; $('runPreferencesBtn').disabled = false; allResults = body.results || []; render(); $('csvLink').href = `/api/jobs/${latestJob}/report.pdf`; $('csvLink').classList.remove('disabled'); }
     else if (body.status === 'failed') { clearInterval(pollTimer); localStorage.removeItem('crewbidiqActiveJob'); activeJob = null; $('analyzeBtn').disabled = false; $('analyzeBtn').textContent = 'Analyze bid package'; showError(body.error || 'Analysis failed'); }
   } catch (error) { pollFailures += 1; setJob(true, 'Reconnecting', 1, 'Your upload is safe. Reconnecting to the analysis…'); if (pollFailures >= 8) { clearInterval(pollTimer); $('analyzeBtn').disabled = false; $('analyzeBtn').textContent = 'Resume analysis'; showError('The connection is taking longer than expected. Tap Resume analysis to try again.'); } }
 }
@@ -83,8 +84,26 @@ function render() {
 
 $('resultLimit').addEventListener('change', render);
 $('saveProfileBtn').addEventListener('click', () => { localStorage.setItem('crewbidiqProfile', JSON.stringify(profile())); $('saveProfileBtn').textContent = 'Saved'; setTimeout(() => $('saveProfileBtn').textContent = 'Save on this device', 1200); });
+$('runPreferencesBtn').addEventListener('click', async () => {
+  clearError();
+  if (!latestJob) return showError('Upload and analyze a bid package first.');
+  const button = $('runPreferencesBtn'), data = new FormData();
+  data.append('profile_json', JSON.stringify(profile()));
+  button.disabled = true; button.textContent = 'Reranking…'; setJob(true, 'Updating', 85, 'Applying your preferences to the parsed bid package');
+  try {
+    const response = await fetch(`/api/jobs/${latestJob}/rescore`, { method: 'POST', body: data, headers: { Accept: 'application/json' } });
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.detail || 'Could not rerun preferences');
+    allResults = body.results || []; localStorage.setItem('crewbidiqProfile', JSON.stringify(profile())); render();
+    setJob(true, 'Complete', 100, body.message || 'Recommendations updated');
+    $('csvLink').href = `/api/jobs/${latestJob}/report.pdf`; $('csvLink').classList.remove('disabled');
+    $('resultsPanel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  } catch (error) { showError(error.message || 'Could not rerun preferences'); setJob(false); }
+  finally { button.disabled = false; button.textContent = 'Run preferences'; }
+});
 function toggleGuide(show) { $('guide').classList.toggle('hidden', !show); if (show) $('guide').scrollIntoView({ behavior: 'smooth' }); }
 $('guideBtn').addEventListener('click', () => toggleGuide(true)); $('closeGuideBtn').addEventListener('click', () => toggleGuide(false));
 $('avoidHolidays').addEventListener('change', () => { if ($('avoidHolidays').checked) $('workHolidays').checked = false; }); $('workHolidays').addEventListener('change', () => { if ($('workHolidays').checked) $('avoidHolidays').checked = false; });
 $('demoBtn').addEventListener('click', () => { allResults = [{ pairing: '2478', display_label: 'Rotation', match_level: 'excellent', credit: '21:35', tafb: '72:10', layovers: [{ city: 'SAN', duration: '16:00' }], cities: ['SAN'], touched_cities: ['ATL', 'MCO', 'SAN'], redeye: 'none', deadheads: 0, duty_legs: [2, 3, 1], first_day_legs: 2, last_day_legs: 1, calendar_conflicts: [], reasons: ['SAN is a highest-priority overnight', 'Matches your preferred trip length', 'No required-day conflicts'], legs: [{ departure: 'ATL', departure_time: '0830', arrival: 'SAN', arrival_time: '1035', flight: '1234', aircraft: '321', deadhead: false }], original_display: '#2478 ATL 0830 SAN 1035' }, { pairing: '1884', display_label: 'Rotation', match_level: 'strong', credit: '19:50', tafb: '67:20', layovers: [{ city: 'BOS', duration: '14:20' }], cities: ['BOS'], touched_cities: ['ATL', 'BOS'], redeye: 'possible', deadheads: 1, duty_legs: [1, 3, 2], first_day_legs: 1, last_day_legs: 2, calendar_conflicts: ['Preferred off: 2026-08-11'], reasons: ['BOS is a preferred overnight', 'One deadhead', 'Touches a preferred day off'] }]; render(); });
 if (activeJob) { setJob(true, 'Resuming', 1, 'Reconnecting to your analysis…'); pollTimer = setInterval(pollJob, 1500); pollJob(); }
+if (latestJob) { $('runPreferencesBtn').disabled = false; $('csvLink').href = `/api/jobs/${latestJob}/report.pdf`; $('csvLink').classList.remove('disabled'); }
