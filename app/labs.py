@@ -61,7 +61,7 @@ LABS_HTML = r"""
   </div>
 </div>
 <script>window.CREWBIDIQ_LABS_PAGE = "__LABS_PAGE__";</script>
-<script src="/static/labs.js?v=0424"></script>
+<script src="/static/labs.js?v=0425"></script>
 </body>
 </html>
 """
