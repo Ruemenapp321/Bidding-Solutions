@@ -1,17 +1,7 @@
-CREWBIDIQ CLEAN REPOSITORY ROOT
+CrewBidIQ v0.2.4 — Layover City Fix
 
-Copy every item in this folder directly into the TOP LEVEL of the CrewBidIQ GitHub repository.
+Copy the CONTENTS of this folder directly into the GitHub repository root.
+Replace the existing app, tests, and root configuration files.
+Do not upload this containing folder as a nested directory.
 
-The repository root should show these items directly:
-- app/
-- tests/
-- data/
-- .gitignore
-- Dockerfile
-- render.yaml
-- requirements.txt
-- README.md
-
-Do not copy the containing folder into the repository.
-Do not leave older CrewBidIQ_v0.x.x folders at the repository root.
-Replace or merge the existing root-level files when prompted, then commit and push.
+This build changes city preference scoring and display so only true overnight/layover cities are used. All airports touched remain available only in expanded details.

@@ -13,3 +13,7 @@ uvicorn app.main:app --reload
 ```
 
 The comprehensive user guide is built into the application header.
+
+## v0.2.4 layover-city correction
+
+Ranked cards and city preference scoring now use only true layover/overnight cities. Connection airports, turns, intermediate stations, and the final return to base are not treated as layovers. Expanded details retain a separate "All cities touched" field for reference.

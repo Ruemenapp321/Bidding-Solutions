@@ -89,7 +89,7 @@ INDEX_HTML = r"""
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#071525">
   <title>CrewBidIQ</title>
-  <link rel="stylesheet" href="/static/app.css?v=0231">
+  <link rel="stylesheet" href="/static/app.css?v=0240">
 </head>
 <body>
 <div class="app-shell">
@@ -102,7 +102,7 @@ INDEX_HTML = r"""
       <a href="#preferences" class="nav-link">⚙ <span>Preferences</span></a>
       <button id="guideBtn" class="nav-link nav-button">? <span>User Guide</span></button>
     </nav>
-    <div class="side-footer">CrewBidIQ v0.2.3 test</div>
+    <div class="side-footer">CrewBidIQ v0.2.4 test</div>
   </aside>
 
   <div class="app-main">
@@ -205,7 +205,7 @@ INDEX_HTML = r"""
     </nav>
   </div>
 </div>
-<script src="/static/app.js?v=0231"></script>
+<script src="/static/app.js?v=0240"></script>
 <script>document.getElementById('mobileGuideBtn').addEventListener('click',()=>document.getElementById('guideBtn').click());</script>
 </body></html>
 """
@@ -280,6 +280,42 @@ def detect_airports(block: str, pairing: dict[str, Any] | None = None) -> list[s
     return out[:50]
 
 
+def detect_layover_cities(pairing: dict[str, Any]) -> list[str]:
+    """Return true overnight/rest cities only, never every airport touched.
+
+    Prefer parser-provided layovers. If a parser did not provide them, infer
+    overnight cities from the final arrival of each duty period except the
+    final duty period.
+    """
+    out: list[str] = []
+    for layover in pairing.get("layovers", []) or []:
+        city = str(layover.get("city") or "").strip().upper()
+        if city and city not in out:
+            out.append(city)
+    if out:
+        return out
+
+    legs = pairing.get("legs", []) or []
+    if not legs:
+        return out
+
+    duty_order: list[str] = []
+    last_arrival_by_duty: dict[str, str] = {}
+    for index, leg in enumerate(legs):
+        duty = str(leg.get("day") or "1")
+        if duty not in duty_order:
+            duty_order.append(duty)
+        arrival = str(leg.get("arrival") or "").strip().upper()
+        if arrival:
+            last_arrival_by_duty[duty] = arrival
+
+    for duty in duty_order[:-1]:
+        city = last_arrival_by_duty.get(duty)
+        if city and city not in out:
+            out.append(city)
+    return out
+
+
 def detect_dates(block: str) -> list[str]:
     patterns = [
         r"\b20\d{2}-\d{2}-\d{2}\b",
@@ -304,7 +340,8 @@ def detect_time_values(block: str) -> list[int]:
 def score_pairing(pairing: dict[str, Any], profile: dict[str, Any]) -> dict[str, Any]:
     block = pairing["block"]
     upper = block.upper()
-    cities = detect_airports(block, pairing)
+    touched_cities = detect_airports(block, pairing)
+    cities = detect_layover_cities(pairing)
     dates = list_field(pairing.get("effective")) if pairing.get("effective") else detect_dates(block)
 
     elite = set(list_field(profile.get("elite_cities")))
@@ -350,7 +387,7 @@ def score_pairing(pairing: dict[str, Any], profile: dict[str, Any]) -> dict[str,
         ("SFO", "SJC"), ("JFK", "LGA"), ("JFK", "EWR"),
         ("LGA", "EWR"), ("DCA", "IAD"), ("DCA", "BWI"),
     ]
-    transfers = [f"{a}→{b}" for a, b in transfer_pairs if a in cities and b in cities]
+    transfers = [f"{a}→{b}" for a, b in transfer_pairs if a in touched_cities and b in touched_cities]
     max_transfers = int(profile.get("max_transfers", 0))
     if len(transfers) > max_transfers:
         score -= (len(transfers) - max_transfers) * float(w.get("transfer", 32))
@@ -419,6 +456,7 @@ def score_pairing(pairing: dict[str, Any], profile: dict[str, Any]) -> dict[str,
         "score": round(score, 1),
         "dates": dates,
         "cities": cities,
+        "touched_cities": touched_cities,
         "preferred_aircraft": aircraft_hits,
         "redeye": redeye,
         "deadheads": deadheads,
