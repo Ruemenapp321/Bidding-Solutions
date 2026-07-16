@@ -75,14 +75,18 @@ def build_bid_report(results: list[dict[str, Any]], profile: dict[str, Any], air
         item_terminology = get_airline_terminology(item.get("airline") or airline)
         story += [PageBreak(), Paragraph(f"{item.get('display_label', item_terminology.singular)} {item.get('pairing')}", styles["Heading1"]), Paragraph(LABELS.get(item.get("match_level", "fair"), "★★ Fair"), styles["Heading2"])]
         equipment = ", ".join(item.get("aircraft_display_names") or item.get("equipment_codes", [])) or "—"
+        wocl_legs = ", ".join(
+            f"{leg.get('departure', 'Unknown')} {leg.get('departure_time', '')}".strip()
+            for leg in item.get("redeye_legs", [])
+        ) or "None"
         item_airline = item.get("airline") or airline
-        row_values = _pay_rows(item, item_airline) + [["TAFB", item.get("tafb")], ["Layovers", ", ".join(x.get("city", "") for x in item.get("layovers", [])) or "None"], ["Equipment", equipment], ["Legs by duty day", " • ".join(map(str, item.get("duty_legs", []))) or "—"], ["Redeyes", item.get("redeye")], ["Why it matched", "; ".join(item.get("reasons", [])) or "No weighted signals"]]
+        row_values = _pay_rows(item, item_airline) + [["TAFB", item.get("tafb")], ["Layovers", ", ".join(x.get("city", "") for x in item.get("layovers", [])) or "None"], ["Equipment", equipment], ["Legs by duty day", " • ".join(map(str, item.get("duty_legs", []))) or "—"], ["WOCL departures", wocl_legs], ["Operating dates", ", ".join(item.get("operating_dates", [])) or "Not available"], ["Why it matched", "; ".join(item.get("reasons", [])) or "No weighted signals"]]
         rows = [[_cell(label, styles["Small"]), _cell(value, styles["Small"])] for label, value in row_values]
         table = Table(rows, colWidths=[1.35*inch, 5.05*inch])
         table.setStyle(TableStyle([("GRID", (0,0), (-1,-1), .25, colors.HexColor("#dbe4ef")), ("BACKGROUND", (0,0), (0,-1), colors.HexColor("#f3f6fa")), ("VALIGN", (0,0), (-1,-1), "TOP"), ("FONT", (0,0), (-1,-1), "Helvetica", 8), ("PADDING", (0,0), (-1,-1), 5)]))
         story += [table, Spacer(1, 12), Paragraph(item_terminology.view_original, styles["Heading2"]), Preformatted(item.get("original_display") or "Not available", styles["Raw"])]
 
     pay_definition = "Southwest TFP means Trips for Pay; Line TFP, carry-out TFP, and efficiency remain distinct. " if airline == "southwest" else ("Delta Total Pay is Trip Credit plus confidently parsed EDP, HOL, and SIT; absent components are not assumed to be zero. " if airline == "delta" else "")
-    story += [PageBreak(), Paragraph("Definitions", styles["Heading1"]), Paragraph(f"{pay_definition}Layover: an overnight or contractual rest location, not every airport operated through. Duty legs: working flight segments within each duty period. TAFB: total time away from base. Redeye: overnight flying identified from structured leg times when available. Match ratings summarize how closely each {terminology.singular.lower()} follows the preferences supplied for this analysis.", styles["BodyText"])]
+    story += [PageBreak(), Paragraph("Definitions", styles["Heading1"]), Paragraph(f"{pay_definition}Layover: an overnight or contractual rest location, not every airport operated through. Duty legs: working flight segments within each duty period. TAFB: total time away from base. Redeye: a parsed flight leg departing during the Window of Circadian Low (WOCL), 02:00 through 05:59 local departure time. Match ratings summarize how closely each {terminology.singular.lower()} follows the preferences supplied for this analysis.", styles["BodyText"])]
     doc.build(story)
     return out.getvalue()

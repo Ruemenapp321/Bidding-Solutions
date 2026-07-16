@@ -219,8 +219,8 @@ function previewPage() {
   return `${pageHeader('BID POOL PREVIEW', 'Know what the package can offer', 'See the overall trip mix before your personal preferences narrow the field.')}
     ${packageCard()}
     ${!ready || !synopsis ? emptyFeature('No bid pool is ready yet') : `<section class="labs-preview-metrics">
-      <article><span>Total trips</span><strong>${escapeHtml(synopsis.total || 0)}</strong><small>Parsed from this package</small></article>
-      <article><span>Contain redeyes</span><strong>${escapeHtml(synopsis.redeye?.percent || 0)}%</strong><small>${escapeHtml(synopsis.redeye?.count || 0)} trips</small></article>
+      <article><span>Unique trips</span><strong>${escapeHtml(synopsis.total || 0)}</strong><small>Repeated operating dates count once</small></article>
+      <article><span>Depart during WOCL</span><strong>${escapeHtml(synopsis.redeye?.percent || 0)}%</strong><small>${escapeHtml(synopsis.redeye?.count || 0)} trips · 02:00–05:59 local</small></article>
       <article><span>Contain deadheads</span><strong>${escapeHtml(synopsis.deadhead?.percent || 0)}%</strong><small>${escapeHtml(synopsis.deadhead?.count || 0)} trips</small></article>
       <article><span>Overnight cities</span><strong>${escapeHtml(synopsis.overnight_city_count || 0)}</strong><small>Distinct layover destinations</small></article>
     </section>
