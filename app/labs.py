@@ -19,7 +19,7 @@ LABS_HTML = r"""
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#071525">
   <title>CrewBidIQ Labs</title>
-  <link rel="stylesheet" href="/static/app.css?v=0420">
+  <link rel="stylesheet" href="/static/app.css?v=0421">
 </head>
 <body class="labs-body" data-labs-page="__LABS_PAGE__">
 <div class="app-shell">
@@ -60,7 +60,7 @@ LABS_HTML = r"""
   </div>
 </div>
 <script>window.CREWBIDIQ_LABS_PAGE = "__LABS_PAGE__";</script>
-<script src="/static/labs.js?v=0420"></script>
+<script src="/static/labs.js?v=0421"></script>
 </body>
 </html>
 """

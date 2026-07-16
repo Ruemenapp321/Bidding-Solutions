@@ -71,6 +71,8 @@ def test_labs_uses_the_classic_job_key_and_has_no_second_upload_flow():
     assert "No bid package loaded" in script.text
     assert "Upload in Classic" in script.text
     assert "new FormData" not in script.text
+    assert "/navblue-plan" in script.text
+    assert "NAVBLUE PBS REQUEST PLAN" in script.text
 
 
 def test_job_status_exposes_package_identity_for_labs(monkeypatch):
