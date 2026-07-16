@@ -50,3 +50,18 @@ def test_navblue_endpoint_uses_same_completed_classic_job(monkeypatch):
     assert response.status_code == 200
     assert response.json()["layers"][0] == {"number": 1, "title": "Start Pairing Group", "requests": []}
     assert response.json()["layers"][1]["requests"][0]["request"] == "Award Pairings If Layover In HNL"
+
+
+def test_navblue_length_counts_elapsed_trip_days_not_duty_periods():
+    plan = build_navblue_layers(
+        {"preferred_trip_lengths": ["4"]},
+        [{"trip_length": 4, "duty_legs": [3, 2, 3]}],
+        "ATL320 AUG.pdf",
+    )
+    length_request = next(
+        request
+        for layer in plan["layers"]
+        for request in layer["requests"]
+        if "Pairing Length" in request["request"]
+    )
+    assert length_request["matching_trip_count"] == 1

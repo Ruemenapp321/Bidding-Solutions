@@ -35,7 +35,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = Path(os.environ.get("DATA_DIR", BASE_DIR / "data"))
 UPLOAD_DIR = DATA_DIR / "uploads"
 DB_PATH = DATA_DIR / "pairingiq.db"
-PARSER_CACHE_VERSION = "2026-07-16.2"
+PARSER_CACHE_VERSION = "2026-07-16.3"
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024
 MAX_PARSE_SECONDS = int(os.environ.get("MAX_PARSE_SECONDS", "600"))
 
@@ -290,7 +290,7 @@ INDEX_HTML = r"""
           <div><span>Top match</span><strong id="snapshotMatch">—</strong></div>
           <div><span id="snapshotPayLabel">Credit</span><strong id="snapshotCredit">—</strong></div>
           <div><span>Trip length</span><strong id="snapshotLength">—</strong></div>
-          <div><span>Recovery</span><strong id="snapshotRecovery">—</strong></div>
+          <div><span>Fatigue</span><strong id="snapshotFatigue">—</strong></div>
         </div>
         <div id="results" class="ranked-list"><div class="empty-state"><span>✈</span><strong>No results yet</strong><p>Your ranked rotations will appear here.</p></div></div>
       </section>
@@ -385,7 +385,7 @@ INDEX_HTML = r"""
               <li><strong>Other-airline credit:</strong> airline-provided trip or sequence credit when available. Total Pay appears only after that airline's pay rules are defined.</li>
               <li><strong>TAFB:</strong> total time away from base.</li>
               <li><strong>Trip length:</strong> number of parsed duty periods.</li>
-              <li><strong>Recovery:</strong> a quick description of workload around flight legs departing during WOCL (02:00 through 05:59 local).</li>
+              <li><strong>Fatigue risk:</strong> flags flight legs departing during WOCL (02:00 through 05:59 local).</li>
               <li><strong>Legs by duty day:</strong> working flight segments in each RPT-to-RLS duty period; deadheads are counted separately.</li>
             </ul>
           </article>
@@ -543,6 +543,11 @@ def extract_text(
         raw = re.sub(r"<style\b[^>]*>.*?</style>", " ", raw, flags=re.I | re.S)
         raw = re.sub(r"<[^>]+>", " ", raw)
     return raw
+
+
+def sort_pdf_text_for_airline(airline: str) -> bool:
+    """Keep native column order for airline packages that use side-by-side records."""
+    return str(airline or "").lower() not in {"american", "delta", "auto"}
 
 
 def pairing_record_quality(pairing: dict[str, Any]) -> tuple[int, int, int, int, int]:
@@ -749,6 +754,14 @@ def airline_for_pairing(pairing: dict[str, Any]) -> str:
 
 
 def detect_start_airport(pairing: dict[str, Any]) -> str | None:
+    # A leading deadhead positions the crew to the airport where the operating
+    # rotation starts. Prefer that first operating origin for pilot-facing use.
+    for leg in pairing.get("legs", []) or []:
+        if leg.get("deadhead"):
+            continue
+        departure = str(leg.get("departure") or "").strip().upper()
+        if departure:
+            return departure
     for leg in pairing.get("legs", []) or []:
         departure = str(leg.get("departure") or "").strip().upper()
         if departure:
@@ -811,6 +824,21 @@ def pairing_duty_count(pairing: dict[str, Any]) -> int:
     return len(duty_labels)
 
 
+def pairing_trip_length(pairing: dict[str, Any]) -> int:
+    """Return elapsed trip days, which may exceed the number of flying duties."""
+    duty_labels: list[str] = []
+    for leg in pairing.get("legs", []) or []:
+        label = str(leg.get("day") or "1").strip().upper()
+        if label not in duty_labels:
+            duty_labels.append(label)
+    if not duty_labels:
+        return 0
+    if airline_for_pairing(pairing) == "delta" and all(re.fullmatch(r"[A-Z]", label) for label in duty_labels):
+        offsets = [ord(label) - ord("A") + 1 for label in duty_labels]
+        return max(offsets) - min(offsets) + 1
+    return len(duty_labels)
+
+
 def filter_pairings_for_profile(pairings: list[dict[str, Any]], profile: dict[str, Any]) -> list[dict[str, Any]]:
     fleets = set(list_field(profile.get("bid_fleets")))
     if not fleets:
@@ -832,7 +860,7 @@ def build_bid_synopsis(pairings: list[dict[str, Any]]) -> dict[str, Any]:
     redeyes = sum(classify_redeye(pairing) != "none" for pairing in pairings)
     deadheads = sum(any(leg.get("deadhead") for leg in pairing.get("legs", []) or []) for pairing in pairings)
     starts = Counter(filter(None, (detect_start_airport(pairing) for pairing in pairings)))
-    lengths = Counter(str(length) for pairing in pairings if (length := pairing_duty_count(pairing)))
+    lengths = Counter(str(length) for pairing in pairings if (length := pairing_trip_length(pairing)))
     layovers = Counter(city for pairing in pairings for city in detect_layover_cities(pairing))
     fleets = Counter(str(pairing.get("fleet")) for pairing in pairings if pairing.get("fleet"))
     return {
@@ -1017,10 +1045,11 @@ def score_pairing(pairing: dict[str, Any], profile: dict[str, Any]) -> dict[str,
             duty_counts.append(0)
         duty_counts[duty_labels.index(day)] += 1
 
+    trip_length = pairing_trip_length(pairing)
     preferred_lengths = {int(x) for x in list_field(profile.get("preferred_trip_lengths")) if x.isdigit()}
-    if duty_counts and len(duty_counts) in preferred_lengths:
+    if trip_length and trip_length in preferred_lengths:
         score += 18
-        reasons.append(f"Matches your preferred {len(duty_counts)}-day trip length")
+        reasons.append(f"Matches your preferred {trip_length}-day trip length")
     limits = (("max_legs_per_day", max(duty_counts, default=0), "maximum legs in a duty day"), ("max_first_day_legs", duty_counts[0] if duty_counts else 0, "first-day legs"), ("max_last_day_legs", duty_counts[-1] if duty_counts else 0, "last-day legs"))
     for key, actual, label in limits:
         limit = profile.get(key)
@@ -1055,7 +1084,7 @@ def score_pairing(pairing: dict[str, Any], profile: dict[str, Any]) -> dict[str,
         "start_airport": start_airport,
         "coterminal_group": coterminal_group_for_airport(airline, start_airport),
         "preferred_aircraft": aircraft_hits,
-        "equipment_codes": pairing.get("equipment_codes", parsed_equipment),
+        "equipment_codes": list(dict.fromkeys(pairing.get("equipment_codes") or parsed_equipment)),
         "equipment_mapping_status": pairing.get("equipment_mapping_status"),
         "redeye": redeye,
         "redeye_legs": redeye_legs,
@@ -1074,8 +1103,9 @@ def score_pairing(pairing: dict[str, Any], profile: dict[str, Any]) -> dict[str,
         "layovers": pairing.get("layovers", []),
         "legs": result_legs,
         "duty_legs": duty_counts,
+        "trip_length": trip_length,
         "trip_length_preference_active": bool(preferred_lengths),
-        "trip_length_match": bool(preferred_lengths and len(duty_counts) in preferred_lengths),
+        "trip_length_match": bool(preferred_lengths and trip_length in preferred_lengths),
         "preferred_trip_lengths": sorted(preferred_lengths),
         "first_day_legs": duty_counts[0] if duty_counts else 0,
         "last_day_legs": duty_counts[-1] if duty_counts else 0,
@@ -1362,7 +1392,7 @@ def process_job(job_id: str, paths: list[Path], profile: dict[str, Any], airline
                     paths[0],
                     paths[0].suffix.lower(),
                     job_id,
-                    sort_pdf_text=airline != "american",
+                    sort_pdf_text=sort_pdf_text_for_airline(airline),
                     deadline=deadline,
                 )
                 pairings, parser_name = parse_pairings(

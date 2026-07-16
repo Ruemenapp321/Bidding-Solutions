@@ -14,6 +14,7 @@ def test_classic_cards_show_delta_total_pay_and_southwest_tfp():
     assert "['Additional Pay', item.additional_pay]" in pay_section
     assert "['EDP', 'HOL', 'SIT']" in pay_section
     assert "Soft credit" not in script
+    assert '<details class="timeline-details"><summary>Timeline and duty legs</summary>' in script
 
 
 def test_labs_uses_airline_specific_pay_language_and_navblue_plan():

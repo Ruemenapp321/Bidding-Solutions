@@ -80,7 +80,7 @@ def build_bid_report(results: list[dict[str, Any]], profile: dict[str, Any], air
             for leg in item.get("redeye_legs", [])
         ) or "None"
         item_airline = item.get("airline") or airline
-        row_values = _pay_rows(item, item_airline) + [["TAFB", item.get("tafb")], ["Layovers", ", ".join(x.get("city", "") for x in item.get("layovers", [])) or "None"], ["Equipment", equipment], ["Legs by duty day", " • ".join(map(str, item.get("duty_legs", []))) or "—"], ["WOCL departures", wocl_legs], ["Operating dates", ", ".join(item.get("operating_dates", [])) or "Not available"], ["Why it matched", "; ".join(item.get("reasons", [])) or "No weighted signals"]]
+        row_values = _pay_rows(item, item_airline) + [["Trip length", f"{item.get('trip_length')} days" if item.get("trip_length") else "N/A"], ["TAFB", item.get("tafb")], ["Layovers", ", ".join(x.get("city", "") for x in item.get("layovers", [])) or "None"], ["Equipment", equipment], ["Legs by duty day", " • ".join(map(str, item.get("duty_legs", []))) or "—"], ["WOCL departures", wocl_legs], ["Operating dates", ", ".join(item.get("operating_dates", [])) or "Not available"], ["Why it matched", "; ".join(item.get("reasons", [])) or "No weighted signals"]]
         rows = [[_cell(label, styles["Small"]), _cell(value, styles["Small"])] for label, value in row_values]
         table = Table(rows, colWidths=[1.35*inch, 5.05*inch])
         table.setStyle(TableStyle([("GRID", (0,0), (-1,-1), .25, colors.HexColor("#dbe4ef")), ("BACKGROUND", (0,0), (0,-1), colors.HexColor("#f3f6fa")), ("VALIGN", (0,0), (-1,-1), "TOP"), ("FONT", (0,0), (-1,-1), "Helvetica", 8), ("PADDING", (0,0), (-1,-1), 5)]))
