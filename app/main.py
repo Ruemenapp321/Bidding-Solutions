@@ -83,97 +83,19 @@ def get_job(job_id: str):
 
 INDEX_HTML = r"""
 <!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="theme-color" content="#154e78">
-<title>CrewBidIQ</title>
-<link rel="stylesheet" href="/static/app.css">
-</head>
-<body>
-<header><div class="brand"><div><h1>CrewBidIQ</h1><p>Build the month you actually want.</p></div></div></header>
-<main>
-<section class="card">
-  <h2>1. Upload bid files</h2>
-  <div class="grid">
-    <label>Airline
-      <select id="airlineChoice">
-        <option value="delta">Delta Air Lines</option>
-        <option value="southwest">Southwest Airlines</option>
-        <option value="american" disabled>American Airlines (coming soon)</option>
-      </select>
-    </label>
-    <label>Base<input id="baseAirport" placeholder="Example: ATL"></label>
-    <label>Fleet / category<input id="fleet" placeholder="Example: A320 Captain"></label>
-    <label>Bid month<input id="bidMonth" type="month"></label>
-  </div>
-  <div id="deltaUploads" class="upload-group">
-    <label>Delta bid package PDF<input id="deltaFile" type="file" accept=".pdf"></label>
-  </div>
-  <div id="southwestUploads" class="upload-group hidden">
-    <div class="grid">
-      <label>Southwest Pairings ZIP<input id="southwestPairingsFile" type="file" accept=".zip"></label>
-      <label>Southwest Lines ZIP<input id="southwestLinesFile" type="file" accept=".zip"></label>
-    </div>
-    <p class="muted small">Both ZIP files are required. CrewBidIQ combines the pairing details with the lines offered, then ranks complete lines.</p>
-  </div>
-  <div class="actions"><button id="analyzeBtn">Upload and analyze</button><button id="demoBtn" class="secondary">Try Sample Data</button></div>
-  <div id="jobPanel" class="job-panel hidden"><div class="job-row"><strong id="jobStatus">Preparing…</strong><span id="jobPercent">0%</span></div><div class="progress"><div id="progressFill"></div></div><div id="jobMessage" class="muted small"></div></div>
-  <div id="errorBox" class="error hidden"></div>
-</section>
-
-<section class="card">
-  <div class="section-head"><div><h2>2. Trip preferences</h2><p class="muted">Enter only the preferences that matter to you. Blank fields are ignored.</p></div><button id="saveProfileBtn" class="ghost">Save preferences</button></div>
-  <div class="grid">
-    <label>Elite layover cities<input id="eliteCities" placeholder="Example: SAN,BOS,LAX"><span class="help">Your highest-value overnight cities.</span></label>
-    <label>Secondary cities<input id="secondaryCities" placeholder="Example: SEA,PDX,MIA"><span class="help">Cities you like, but less strongly.</span></label>
-    <label>Interesting cities<input id="smallCities" placeholder="Example: SAV,CHS,BTV"><span class="help">Occasional or niche favorites.</span></label>
-    <label>Penalty cities<input id="penaltyCities" placeholder="Example: DFW,IAH"><span class="help">Cities that should reduce a score.</span></label>
-    <label>Preferred aircraft / subtype codes<input id="preferredAircraft" placeholder="Example: NEO,3NE,321"></label>
-    <label>Maximum deadheads<input id="maxDeadheads" type="number" min="0" placeholder="Example: 1"></label>
-    <label>Maximum airport transfers<input id="maxTransfers" type="number" min="0" placeholder="Example: 0"></label>
-    <label>Preferred trip lengths (days)<input id="preferredTripLengths" placeholder="Example: 2,3,4"></label>
-    <label>Maximum legs per duty day<input id="maxLegsPerDay" type="number" min="1" placeholder="Example: 3"></label>
-    <label>Minimum layover hours<input id="minLayoverHours" type="number" min="0" placeholder="Example: 12"></label>
-  </div>
-</section>
-
-<section class="card">
-  <h2>3. Calendar and quality-of-life preferences</h2>
-  <div class="grid">
-    <label>Required days off<textarea id="requiredDaysOff" placeholder="YYYY-MM-DD, separated by commas"></textarea></label>
-    <label>Preferred days off<textarea id="preferredDaysOff" placeholder="YYYY-MM-DD, separated by commas"></textarea></label>
-    <label>Holidays / special dates<textarea id="holidayDates" placeholder="Example: 2026-12-25,2027-01-01"></textarea></label>
-    <label>Preferred weekdays off<input id="preferredWeekdays" placeholder="Example: SAT,SUN"></label>
-    <label>Maximum consecutive work days<input id="maxConsecutiveWorkDays" type="number" min="1" placeholder="Example: 5"></label>
-    <label>Minimum consecutive days off<input id="minConsecutiveDaysOff" type="number" min="1" placeholder="Example: 2"></label>
-    <label>Earliest report time<input id="earliestReport" type="time"></label>
-    <label>Latest release time<input id="latestRelease" type="time"></label>
-    <label>Commuter: latest acceptable check-in<input id="commuterLatestCheckin" type="time"></label>
-    <label>Commuter: earliest acceptable release<input id="commuterEarliestRelease" type="time"></label>
-  </div>
-  <div class="checks">
-    <label><input id="preferWeekendsOff" type="checkbox"> Prefer weekends off</label><label><input id="avoidHolidays" type="checkbox"> Avoid listed holidays</label><label><input id="allowProductiveRedeye" type="checkbox"> Allow productive redeyes</label><label><input id="avoidFinalRedeye" type="checkbox"> Avoid final-day redeyes</label><label><input id="avoidReserve" type="checkbox"> Avoid reserve / standby lines</label><label><input id="preferOperate" type="checkbox"> Prefer operating over deadheading</label>
-  </div>
-</section>
-
-<section class="card">
-  <div class="section-head"><div><h2>4. Scoring weights</h2><p class="muted">Weights control ranking, not exclusion. Higher numbers make a preference matter more. Use 0 to ignore it; 10–25 for a mild preference; 25–60 for an important preference; 60+ only for a major priority. Required-day conflicts are intentionally very high.</p></div><button id="guideBtn" class="ghost">User guide</button></div>
-  <div id="guide" class="guide hidden"><h3>Filters vs. weights</h3><p><strong>Filters</strong> remove results that fail a requirement. <strong>Weights</strong> move results up or down while keeping them available. Avoid making every weight extremely high; reserve the largest values for what truly drives your bid.</p><h3>Simple starting point</h3><p>Start with 2–4 preferences. Give favorites a weight around 20–30, strong dislikes 20–40, and major quality-of-life priorities 50–75. Review the explanations in the results and adjust.</p></div>
-  <div class="grid compact">
-    <label>Elite city<input id="wElite" type="number" value="28"></label><label>Secondary city<input id="wSecondary" type="number" value="12"></label><label>Interesting city<input id="wSmall" type="number" value="6"></label><label>Penalty city<input id="wPenalty" type="number" value="18"></label><label>Preferred aircraft<input id="wAircraft" type="number" value="20"></label><label>Pure/simple trip<input id="wPure" type="number" value="65"></label><label>Airport transfer<input id="wTransfer" type="number" value="32"></label><label>Extra deadhead<input id="wDeadhead" type="number" value="18"></label><label>Required day conflict<input id="wRequiredConflict" type="number" value="500"></label><label>Preferred day conflict<input id="wPreferredConflict" type="number" value="35"></label><label>Holiday conflict<input id="wHolidayConflict" type="number" value="60"></label><label>Early report<input id="wEarlyReport" type="number" value="20"></label><label>Late release<input id="wLateRelease" type="number" value="20"></label>
-  </div>
-</section>
-
-<section class="card">
-  <div class="section-head"><div><h2 id="resultsTitle">5. Ranked pairings</h2><p id="summary" class="muted">No analysis yet.</p></div><div class="actions tight"><select id="resultLimit"><option value="25">Top 25</option><option value="50">Top 50</option><option value="100">Top 100</option><option value="all">Show all</option></select><a id="csvLink" class="button secondary disabled" href="#">Export CSV</a><button id="printBtn" class="ghost">Print</button></div></div>
-  <div class="table-wrap"><table><thead><tr><th>Rank</th><th id="itemHeader">Pairing</th><th>Score</th><th>Credit</th><th>TAFB</th><th>Operating dates</th><th>Cities</th><th>Layovers</th><th>Aircraft</th><th>Redeye</th><th>DH</th><th>Transfers</th><th>Conflicts</th><th>Why</th><th>Soft credit</th></tr></thead><tbody id="results"></tbody></table></div>
-</section>
-</main>
-<script src="/static/app.js"></script>
-</body>
-</html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#154e78"><title>CrewBidIQ</title><link rel="stylesheet" href="/static/app.css"></head>
+<body><header><div class="brand"><div><h1>CrewBidIQ</h1><p>Build the month you actually want.</p></div><button id="guideBtn" class="header-help">User Guide</button></div></header><main>
+<section class="card"><h2>1. Upload your bid package</h2><div class="grid"><label>Airline<select id="airlineChoice"><option value="delta">Delta Air Lines</option><option value="southwest">Southwest Airlines</option><option value="american">American Airlines</option><option value="generic">Other airline / generic PDF</option></select></label></div>
+<div id="pdfUploads" class="upload-group"><strong>Most airlines</strong><p class="muted small">Upload one bid-package PDF.</p><label>Bid package PDF<input id="pdfFile" type="file" accept=".pdf,application/pdf"></label></div>
+<div id="southwestUploads" class="upload-group hidden"><strong>Southwest Airlines</strong><p class="muted small">Upload one ZIP containing both Lines and Pairings, or upload the two text files individually.</p><label>One ZIP containing Lines and Pairings<input id="southwestZip" type="file" accept=".zip,application/zip"></label><div class="or">or</div><div class="grid"><label>Pairings text file<input id="southwestPairingsFile" type="file" accept=".txt,text/plain"></label><label>Lines text file<input id="southwestLinesFile" type="file" accept=".txt,text/plain"></label></div></div>
+<div class="actions"><button id="analyzeBtn">Upload and analyze</button><button id="demoBtn" class="secondary">Try sample data</button></div><div id="jobPanel" class="job-panel hidden"><div class="job-row"><strong id="jobStatus">Preparing…</strong><span id="jobPercent">0%</span></div><div class="progress"><div id="progressFill"></div></div><div id="jobMessage" class="muted small"></div></div><div id="errorBox" class="error hidden"></div></section>
+<section class="card"><div class="section-head"><div><h2>2. Trip preferences</h2><p class="muted">Enter only what matters to you. Blank fields are ignored.</p></div><button id="saveProfileBtn" class="ghost">Save preferences</button></div><div class="grid">
+<label>Highest-priority layover cities<input id="eliteCities" placeholder="SAN,BOS,LAX"><span class="help">Cities you most want to see in a trip.</span></label><label>Preferred layover cities<input id="secondaryCities" placeholder="SEA,PDX,MIA"></label><label>Occasional-favorite cities<input id="smallCities" placeholder="SAV,CHS,BTV"></label><label>Avoid layover cities<input id="penaltyCities" placeholder="DFW,IAH"></label><label>Preferred aircraft / subtype codes<input id="preferredAircraft" placeholder="NEO,3NE,321"></label><label>Preferred trip lengths (days)<input id="preferredTripLengths" placeholder="2,3,4"></label><label>Maximum deadheads<input id="maxDeadheads" type="number" min="0" placeholder="1"></label><label>Maximum airport transfers<input id="maxTransfers" type="number" min="0" placeholder="0"></label><label>Maximum legs per duty day<input id="maxLegsPerDay" type="number" min="1" placeholder="3"></label><label>Minimum layover hours<input id="minLayoverHours" type="number" min="0" placeholder="12"></label><label>Maximum legs after post-redeye rest<input id="maxLegsAfterRedeye" type="number" min="0" placeholder="2"></label></div></section>
+<section class="card"><h2>3. Calendar and quality of life</h2><div class="grid"><label>Required days off<textarea id="requiredDaysOff" placeholder="YYYY-MM-DD, separated by commas"></textarea></label><label>Preferred days off<textarea id="preferredDaysOff" placeholder="YYYY-MM-DD, separated by commas"></textarea></label><label>Holidays / special dates<textarea id="holidayDates" placeholder="2026-12-25,2027-01-01"></textarea></label><label>Preferred days off by weekday<input id="preferredWeekdays" placeholder="SAT,SUN"></label><label>Earliest report time<input id="earliestReport" type="time"></label><label>Latest release time<input id="latestRelease" type="time"></label><label>Maximum consecutive work days<input id="maxConsecutiveWorkDays" type="number" min="1" placeholder="5"></label><label>Minimum consecutive days off<input id="minConsecutiveDaysOff" type="number" min="1" placeholder="2"></label></div><div class="checks"><label><input id="preferWeekendsOff" type="checkbox"> Prefer weekends off</label><label><input id="avoidHolidays" type="checkbox"> Avoid working listed holidays</label><label><input id="workHolidays" type="checkbox"> Prefer working listed holidays</label><label><input id="allowMidRotationRedeye" type="checkbox"> Allow mid-rotation redeyes</label><label><input id="allowRedeyeStart" type="checkbox"> Allow redeye starts</label><label><input id="avoidFinalRedeye" type="checkbox"> Avoid final-day redeyes</label><label><input id="avoidReserve" type="checkbox"> Avoid reserve / standby lines</label><label><input id="preferOperate" type="checkbox"> Prefer operating over deadheading</label></div></section>
+<section class="card"><h2>4. Scoring weights</h2><p class="muted">Higher numbers make a preference matter more. Use 0 to ignore it.</p><div class="grid compact"><label>Top city<input id="wElite" type="number" value="28"></label><label>Preferred city<input id="wSecondary" type="number" value="12"></label><label>Occasional favorite<input id="wSmall" type="number" value="6"></label><label>Avoid city<input id="wPenalty" type="number" value="18"></label><label>Preferred aircraft<input id="wAircraft" type="number" value="20"></label><label>Simple trip<input id="wPure" type="number" value="65"></label><label>Airport transfer<input id="wTransfer" type="number" value="32"></label><label>Extra deadhead<input id="wDeadhead" type="number" value="18"></label><label>Required-day conflict<input id="wRequiredConflict" type="number" value="500"></label><label>Preferred-day conflict<input id="wPreferredConflict" type="number" value="35"></label><label>Holiday conflict<input id="wHolidayConflict" type="number" value="60"></label><label>Early report<input id="wEarlyReport" type="number" value="20"></label><label>Late release<input id="wLateRelease" type="number" value="20"></label></div></section>
+<section class="card"><div class="section-head"><div><h2 id="resultsTitle">5. Ranked pairings</h2><p id="summary" class="muted">No analysis yet.</p></div><div class="actions tight"><select id="resultLimit"><option value="25">Top 25</option><option value="50">Top 50</option><option value="100">Top 100</option><option value="all">Show all</option></select><a id="csvLink" class="button secondary disabled" href="#">Export CSV</a><button id="printBtn" class="ghost">Print</button></div></div><p class="help"><strong>Conflicts</strong> are dates or preferences the pairing violates, such as a required day off, preferred day off, or avoided holiday.</p><div class="table-wrap"><table><thead><tr><th>Rank</th><th id="itemHeader">Pairing</th><th>Score</th><th>Credit</th><th>TAFB</th><th>Cities</th><th>Layovers</th><th>Aircraft</th><th>Redeye</th><th>DH</th><th>Transfers</th><th>Conflicts</th><th>Why</th><th>Soft credit</th></tr></thead><tbody id="results"></tbody></table></div></section>
+<section id="guide" class="card guide-card hidden"><div class="section-head"><h2>Comprehensive User Guide</h2><button id="closeGuideBtn" class="ghost">Close</button></div><h3>What CrewBidIQ does</h3><p>CrewBidIQ reads an airline bid package, evaluates trips or lines against your preferences, and ranks the results. It does not submit a bid or guarantee an awarded schedule.</p><h3>Uploading</h3><p><strong>Most airlines:</strong> upload one PDF bid package. <strong>Southwest:</strong> upload one ZIP containing both Lines and Pairings, or upload the Lines and Pairings text files separately.</p><h3>Preferences</h3><p>Blank fields are ignored. Required days off receive the strongest conflict penalty. Preferred days off and weekday preferences influence ranking without automatically removing a result. Earliest report and latest release are your acceptable time boundaries.</p><p><strong>Mid-rotation redeye:</strong> a redeye flown in the middle of a trip. <strong>Redeye start:</strong> a trip beginning with a redeye. <strong>Maximum legs after post-redeye rest:</strong> the most legs you want on the duty day following the rest period after a redeye.</p><p><strong>Work holidays</strong> favors trips touching your listed holiday dates. <strong>Avoid holidays</strong> penalizes them. Do not select both.</p><h3>Results</h3><p><strong>Score</strong> is the relative ranking created from your preferences and weights. <strong>Conflicts</strong> lists direct preference violations. <strong>Why</strong> explains important positive and negative scoring signals. <strong>DH</strong> means deadheads. <strong>TAFB</strong> means time away from base.</p><h3>Soft credit</h3><p>For Delta, CrewBidIQ displays only EDP, HOL, and SIT when detected. For Southwest and other airlines, Soft Credit displays N/A until airline-specific definitions are added.</p><h3>Tips</h3><p>Start with a few priorities, review the explanations, and then adjust weights. Very large weights can overwhelm every other preference. Saved preferences remain only on the current device and browser.</p><h3>Important limitations</h3><p>Bid-package formats can change. Always compare important results with the original airline material before bidding.</p></section>
+</main><script src="/static/app.js"></script></body></html>
 """
 
 
@@ -390,7 +312,7 @@ def score_pairing(pairing: dict[str, Any], profile: dict[str, Any]) -> dict[str,
         "release": pairing.get("release"),
         "layovers": pairing.get("layovers", []),
         "legs": pairing.get("legs", []),
-        "soft_credit": " ".join(re.findall(r"\b\d{2,3}(?:MCD|TRP|DPA|FDP|SIT|EDP|HOL|CRD)\b", upper)) or None,
+        "soft_credit": " ".join(re.findall(r"\b(?:\d{1,3})?(?:EDP|HOL|SIT)\b", upper)) or None,
         "item_type": "pairing",
     }
 
@@ -478,8 +400,26 @@ def process_job(job_id: str, paths: list[Path], profile: dict[str, Any], airline
     try:
         update_job(job_id, status="processing", progress=5, message="Opening uploaded file(s)")
         if airline == "southwest":
-            pairings_text = extract_archive_text(paths[0], work_dir / "pairings", job_id, "Pairings")
-            lines_text = extract_archive_text(paths[1], work_dir / "lines", job_id, "Lines")
+            if len(paths) == 1 and paths[0].suffix.lower() == ".zip":
+                with zipfile.ZipFile(paths[0]) as archive:
+                    members = [m for m in archive.infolist() if not m.is_dir() and ".." not in Path(m.filename).parts]
+                    pairing_chunks, line_chunks = [], []
+                    for i, member in enumerate(members, 1):
+                        name = Path(member.filename).name.lower()
+                        if Path(name).suffix.lower() not in {".txt", ".csv", ".html", ".htm"}:
+                            continue
+                        raw = archive.read(member).decode("utf-8", errors="ignore")
+                        if "pair" in name:
+                            pairing_chunks.append(raw)
+                        elif "line" in name:
+                            line_chunks.append(raw)
+                    if not pairing_chunks or not line_chunks:
+                        raise RuntimeError("The Southwest ZIP must contain both a Pairings file and a Lines file.")
+                    pairings_text = "\n\n".join(pairing_chunks)
+                    lines_text = "\n\n".join(line_chunks)
+            else:
+                pairings_text = extract_text(paths[0], paths[0].suffix.lower(), job_id)
+                lines_text = extract_text(paths[1], paths[1].suffix.lower(), job_id)
             pairings, parser_name = parse_pairings(pairings_text, job_id, "southwest")
             update_job(job_id, progress=72, message=f"Matching {len(pairings)} pairings to offered lines")
             scored_pairings = {p["id"]: score_pairing(p, profile) for p in pairings}
@@ -490,7 +430,7 @@ def process_job(job_id: str, paths: list[Path], profile: dict[str, Any], airline
             item_label = "lines"
         else:
             text = extract_text(paths[0], paths[0].suffix.lower(), job_id)
-            pairings, parser_name = parse_pairings(text, job_id, "delta")
+            pairings, parser_name = parse_pairings(text, job_id, airline if airline in {"delta", "american"} else "auto")
             update_job(job_id, progress=75, message=f"Scoring {len(pairings)} pairings")
             results = [score_pairing(pairing, profile) for pairing in pairings]
             item_label = "pairings"
@@ -521,18 +461,23 @@ async def create_job(
         raise HTTPException(400, "Invalid preference profile") from exc
     airline = airline.lower().strip()
     uploads: list[UploadFile]
-    if airline == "delta":
+    if airline == "southwest":
+        if file:
+            if Path(file.filename or "").suffix.lower() != ".zip":
+                raise HTTPException(400, "Southwest combined upload must be one ZIP containing Lines and Pairings.")
+            uploads = [file]
+        elif pairings_file and lines_file:
+            if any(Path(x.filename or "").suffix.lower() != ".txt" for x in (pairings_file, lines_file)):
+                raise HTTPException(400, "Southwest individual uploads must be two text files.")
+            uploads = [pairings_file, lines_file]
+        else:
+            raise HTTPException(400, "Upload one Southwest ZIP, or both the Pairings and Lines text files.")
+    elif airline in {"delta", "american", "generic"}:
         if not file:
-            raise HTTPException(400, "Choose a Delta bid package PDF.")
+            raise HTTPException(400, "Choose a bid-package PDF.")
         if Path(file.filename or "").suffix.lower() != ".pdf":
-            raise HTTPException(400, "Delta requires one PDF bid package.")
+            raise HTTPException(400, "This airline requires one PDF bid package.")
         uploads = [file]
-    elif airline == "southwest":
-        if not pairings_file or not lines_file:
-            raise HTTPException(400, "Southwest requires both the Pairings ZIP and Lines ZIP.")
-        if any(Path(x.filename or "").suffix.lower() != ".zip" for x in (pairings_file, lines_file)):
-            raise HTTPException(400, "Both Southwest files must be ZIP files.")
-        uploads = [pairings_file, lines_file]
     else:
         raise HTTPException(400, "That airline is not supported yet.")
 
