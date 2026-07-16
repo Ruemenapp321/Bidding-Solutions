@@ -53,6 +53,18 @@ def test_start_airport_preferences_apply_to_coterminal_group_and_avoid_wins():
     assert any("prefer to avoid" in reason for reason in avoided["reasons"])
 
 
+def test_leading_deadhead_uses_first_operating_origin_as_start_airport():
+    positioned = pairing(start="ATL")
+    positioned["legs"].insert(0, {
+        "day": "A", "departure": "ATL", "departure_time": "0700",
+        "arrival": "JFK", "arrival_time": "0900", "deadhead": True,
+    })
+    positioned["legs"][1]["departure"] = "JFK"
+    result = score_pairing(positioned, {"preferred_start_airports": ["NYC"], "prefer_operate": False})
+    assert result["start_airport"] == "JFK"
+    assert any("preferred airport JFK" in reason for reason in result["reasons"])
+
+
 def test_american_bid_fleet_is_a_hard_filter():
     offered = [pairing("1001", fleet="320"), pairing("1002", fleet="737")]
     assert [item["id"] for item in filter_pairings_for_profile(offered, {"bid_fleets": ["320"]})] == ["1001"]
@@ -69,7 +81,7 @@ def test_synopsis_summarizes_redeyes_deadheads_lengths_starts_and_fleets():
     assert synopsis["redeye"] == {"count": 1, "percent": 50.0}
     assert synopsis["deadhead"] == {"count": 1, "percent": 50.0}
     assert synopsis["overnight_city_count"] == 1
-    assert {row["airport"] for row in synopsis["start_airports"]} == {"JFK", "LGA"}
+    assert {row["airport"] for row in synopsis["start_airports"]} == {"JFK", "BOS"}
     assert {row["fleet"] for row in synopsis["fleets"]} == {"320", "737"}
     assert synopsis["count_basis"] == "unique_trip_id"
 

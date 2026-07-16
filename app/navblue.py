@@ -102,9 +102,10 @@ def build_navblue_layers(
 
     shape_requests: list[dict[str, Any]] = []
     lengths = sorted({int(value) for value in _list(profile.get("preferred_trip_lengths")) if value.isdigit()})
+    result_length = lambda result: int(result.get("trip_length") or len(result.get("duty_legs", [])))
     if len(lengths) == 1:
         length = lengths[0]
-        matches = sum(len(result.get("duty_legs", [])) == length for result in results)
+        matches = sum(result_length(result) == length for result in results)
         shape_requests.append(_request(
             f"Award Pairings If Pairing Length = {length} Days",
             f"Favor the preferred {length}-day pairing length.",
@@ -112,7 +113,7 @@ def build_navblue_layers(
         ))
     elif lengths:
         low, high = min(lengths), max(lengths)
-        matches = sum(low <= len(result.get("duty_legs", [])) <= high for result in results)
+        matches = sum(low <= result_length(result) <= high for result in results)
         shape_requests.append(_request(
             f"Award Pairings If Pairing Length Between {low} Days And {high} Days",
             f"Favor preferred pairing lengths from {low} through {high} days.",
