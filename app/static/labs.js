@@ -8,6 +8,9 @@ let sessionLoading = true;
 let navbluePlan = null;
 let navbluePlanJob = null;
 let navbluePlanError = '';
+let monthPlan = null;
+let monthPlanJob = null;
+let monthPlanError = '';
 let labsUploadBusy = false;
 let labsUploadController = null;
 let labsUploadError = '';
@@ -188,6 +191,19 @@ function builderPage() {
         <label>Seat<input id="labsSenioritySeat" value="${escapeHtml(value('senioritySeat'))}" placeholder="FO"></label>
         <label>Bid month<input id="labsBidMonth" value="${escapeHtml(value('bidMonth'))}" placeholder="August 2026"></label>
       </div></details>
+      <details class="advanced" open><summary>Month-level plan</summary><div class="labs-form-grid">
+        <label>Target credit / TFP minimum<input id="labsTargetCreditMin" type="number" min="0" step="0.1" value="${escapeHtml(value('targetCreditMin'))}" placeholder="75"></label>
+        <label>Target credit / TFP maximum<input id="labsTargetCreditMax" type="number" min="0" step="0.1" value="${escapeHtml(value('targetCreditMax'))}" placeholder="85"></label>
+        <label>Target workdays<input id="labsTargetWorkdays" type="number" min="0" value="${escapeHtml(value('targetWorkdays'))}" placeholder="15"></label>
+        <label>Minimum days off<input id="labsMinimumDaysOff" type="number" min="0" value="${escapeHtml(value('minimumDaysOff'))}" placeholder="12"></label>
+        <label>Preferred work blocks<input id="labsWorkBlocks" value="${escapeHtml(value('workBlocks'))}" placeholder="3-4 days"></label>
+        <label>Preferred days-off blocks<input id="labsOffBlocks" value="${escapeHtml(value('offBlocks'))}" placeholder="4+ days"></label>
+        <label>Vacation dates<input id="labsVacation" value="${escapeHtml(value('vacation'))}" placeholder="8/10-8/14"></label>
+        <label>Training dates<input id="labsTraining" value="${escapeHtml(value('training'))}" placeholder="8/20"></label>
+        <label>Carry-in<input id="labsCarryIn" value="${escapeHtml(value('carryIn'))}" placeholder="Sequence and dates"></label>
+        <label>Carry-out<input id="labsCarryOut" value="${escapeHtml(value('carryOut'))}" placeholder="Sequence and dates"></label>
+        <label>Risk tolerance<select id="labsRiskTolerance"><option value="conservative">Conservative</option><option value="balanced">Balanced</option><option value="aggressive">Aggressive</option></select></label>
+      </div></details>
       <label class="labs-notes">What would make this a successful month?<textarea id="labsNotes" placeholder="Example: Protect my daughter's birthday and favor longer Hawaii layovers.">${escapeHtml(value('notes'))}</textarea></label>
       <div class="labs-builder-actions"><button id="saveLabsDraft" class="secondary">Save draft</button><a id="openLabsRecommendations" class="primary button" href="/labs/recommendations">Refine recommendations</a></div>
     </section>
@@ -279,7 +295,19 @@ function mergedLabsProfile() {
     max_legs_per_day: draft.maxLegs || classic.max_legs_per_day,
     earliest_report_minutes: draft.earliestReport ? clockMinutes(draft.earliestReport) : (classic.earliest_report_minutes ?? null),
     latest_release_minutes: draft.latestRelease ? clockMinutes(draft.latestRelease) : (classic.latest_release_minutes ?? null),
-    seniority_context: seniorityContext
+    seniority_context: seniorityContext,
+    target_credit_min: draft.targetCreditMin || null,
+    target_credit_max: draft.targetCreditMax || null,
+    target_workdays: draft.targetWorkdays || null,
+    minimum_days_off: draft.minimumDaysOff || null,
+    hard_dates_off: draft.requiredDays ? split(draft.requiredDays) : (classic.required_days_off || []),
+    preferred_work_blocks: draft.workBlocks ? split(draft.workBlocks) : [],
+    preferred_days_off_blocks: draft.offBlocks ? split(draft.offBlocks) : [],
+    vacation: draft.vacation ? split(draft.vacation) : [],
+    training: draft.training ? split(draft.training) : [],
+    carry_in: draft.carryIn ? split(draft.carryIn) : [],
+    carry_out: draft.carryOut ? split(draft.carryOut) : [],
+    risk_tolerance: draft.riskTolerance || 'balanced'
   };
 }
 
@@ -287,14 +315,15 @@ function planPage() {
   const ready = sessionJob?.status === 'complete';
   const draft = readJson(draftKey, {}) || {};
   const focus = ({ quality: 'Quality of life', days_off: 'Protect days off', layovers: 'Preferred layovers', credit: payGoalLabel(), commute: 'Commute-friendly trips' })[draft.focus] || 'Classic preference ranking';
+  const monthBody = monthPlanError ? `<section class="surface labs-feature-empty"><h2>Month plan could not be generated</h2><p>${escapeHtml(monthPlanError)}</p></section>` : !monthPlan ? `<section class="surface labs-loading"><strong>Building your month-level trip pools...</strong></section>` : `<section class="surface month-plan"><div class="surface-title"><div><div><span class="kicker">MONTH-LEVEL PBS PLAN</span><h2>Build the whole month</h2><p>${escapeHtml(monthPlan.eligible_occurrence_count)} eligible published occurrences · ${escapeHtml(monthPlan.estimated_trips_needed ?? 'Target needed')} estimated trips needed</p></div></div></div><div class="month-pool-grid">${['primary', 'secondary', 'fallback'].map(key => { const pool = monthPlan.pools[key]; return `<article><span>${escapeHtml(pool.name)}</span><strong>${escapeHtml(pool.occurrence_count)} occurrences</strong><small>${escapeHtml(pool.unique_trip_count)} unique trips</small></article>`; }).join('')}</div><div class="labs-plan-note"><strong>${escapeHtml(monthPlan.monthly_credit_feasibility)}</strong>${monthPlan.warnings.map(warning => `<p>${escapeHtml(warning)}</p>`).join('')}${monthPlan.limitations.map(value => `<p>${escapeHtml(value)}</p>`).join('')}</div></section>`;
   const planBody = navbluePlanError ? `<section class="surface labs-feature-empty"><h2>Bid plan could not be generated</h2><p>${escapeHtml(navbluePlanError)}</p><button class="primary" type="button" onclick="window.location.reload()">Try again</button></section>` : !navbluePlan ? `<section class="surface labs-loading"><strong>Building your NavBlue request layers...</strong><p>Translating your saved preferences into an ordered, pilot-reviewable bid.</p></section>` : `<section class="surface bid-plan navblue-plan">
       <div class="surface-title"><div><div><span class="kicker">NAVBLUE PBS REQUEST PLAN</span><h2>${escapeHtml(focus)}</h2><p>${escapeHtml(navbluePlan.request_count)} ordered requests derived from your Classic preferences and Labs draft.</p></div></div><span class="beta-badge">Draft</span></div>
-      <div class="navblue-layer-list">${navbluePlan.layers.map(layer => `<article class="navblue-layer"><header><span>Layer ${escapeHtml(layer.number)}</span><h3>${escapeHtml(layer.title)}</h3></header><ol>${layer.requests.map(request => `<li><code>${escapeHtml(request.request)}</code><p>${escapeHtml(request.reason)}</p>${request.matching_trip_count !== undefined ? `<small>${escapeHtml(request.matching_trip_count)} trip${request.matching_trip_count === 1 ? '' : 's'} associated with this request</small>` : ''}</li>`).join('')}</ol></article>`).join('')}</div>
+      <div class="navblue-layer-list">${navbluePlan.layers.map(layer => `<article class="navblue-layer"><header><span>Bid Group ${escapeHtml(layer.number)}</span><h3>${escapeHtml(layer.title)}</h3></header><ol>${layer.requests.map(request => `<li><code>${escapeHtml(request.request)}</code><p><strong>${escapeHtml(request.interface_category)} · ${escapeHtml(request.preference_type)}</strong>${request.values?.length ? ` · ${escapeHtml(request.values.join(', '))}` : ''}</p><p>${escapeHtml(request.explanation || request.reason)}</p>${request.relaxed_from_previous ? `<small>${escapeHtml(request.relaxed_from_previous)}</small>` : ''}${request.matching_trip_count !== undefined ? `<small>${escapeHtml(request.matching_trip_count)} trip${request.matching_trip_count === 1 ? '' : 's'} associated with this request</small>` : ''}</li>`).join('')}</ol>${layer.next_action ? `<footer>${escapeHtml(layer.next_action)}</footer>` : ''}</article>`).join('')}</div>
       <div class="labs-plan-note"><strong>Before you submit</strong>${navbluePlan.warnings.map(warning => `<p>${escapeHtml(warning)}</p>`).join('')}</div>
     </section>`;
   return `${pageHeader('PROPOSED BID PLAN', 'Build actual NavBlue request layers', 'Review an ordered PBS request strategy—not another list of pairings—and enter it in NavBlue only after pilot verification.')}
     ${packageCard()}
-    ${!ready ? emptyFeature('A proposed plan needs Classic results') : planBody}
+    ${!ready ? emptyFeature('A proposed plan needs Classic results') : `${monthBody}${planBody}`}
     <div class="labs-page-actions"><a class="secondary button" href="/labs/recommendations">Review supporting pairings</a><a class="text-button button" href="/">Return to Classic</a></div>`;
 }
 
@@ -398,6 +427,7 @@ async function submitLabsPackage(replaceConfirmed = false) {
     sessionJob = { ...body, status: 'queued', progress: 1, stage: 'detecting_package', stage_label: 'Detecting airline and package type', message: 'Upload received' };
     sessionLoading = false;
     navbluePlan = null; navbluePlanJob = null; navbluePlanError = '';
+    monthPlan = null; monthPlanJob = null; monthPlanError = '';
     labsUploadBusy = false; labsUploadController = null; labsUploadError = '';
     render();
     loadSharedSession();
@@ -433,6 +463,7 @@ function bindBuilder() {
   if (!button) return;
   const draft = readJson(draftKey, {}) || {};
   document.getElementById('labsFocus').value = draft.focus || 'quality';
+  document.getElementById('labsRiskTolerance').value = draft.riskTolerance || 'balanced';
   const saveCurrentDraft = (showConfirmation = true) => {
     const saved = {
       focus: document.getElementById('labsFocus').value,
@@ -450,6 +481,17 @@ function bindBuilder() {
       seniorityFleet: document.getElementById('labsSeniorityFleet').value.trim().toUpperCase(),
       senioritySeat: document.getElementById('labsSenioritySeat').value.trim().toUpperCase(),
       bidMonth: document.getElementById('labsBidMonth').value.trim(),
+      targetCreditMin: document.getElementById('labsTargetCreditMin').value,
+      targetCreditMax: document.getElementById('labsTargetCreditMax').value,
+      targetWorkdays: document.getElementById('labsTargetWorkdays').value,
+      minimumDaysOff: document.getElementById('labsMinimumDaysOff').value,
+      workBlocks: document.getElementById('labsWorkBlocks').value.trim(),
+      offBlocks: document.getElementById('labsOffBlocks').value.trim(),
+      vacation: document.getElementById('labsVacation').value.trim(),
+      training: document.getElementById('labsTraining').value.trim(),
+      carryIn: document.getElementById('labsCarryIn').value.trim(),
+      carryOut: document.getElementById('labsCarryOut').value.trim(),
+      riskTolerance: document.getElementById('labsRiskTolerance').value,
       intentText: document.getElementById('labsIntentText').value.trim(),
       tripIntentResult: tripIntentResult || draft.tripIntentResult || null,
       interpretedProfile: draft.interpretedProfile || {},
@@ -534,6 +576,27 @@ async function loadNavbluePlan(jobId) {
   render();
 }
 
+async function loadMonthPlan(jobId) {
+  if (!jobId || monthPlanJob === jobId) return;
+  monthPlanJob = jobId;
+  monthPlan = null;
+  monthPlanError = '';
+  render();
+  try {
+    const response = await fetch(`/api/jobs/${jobId}/month-plan`, {
+      method: 'POST',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+      body: JSON.stringify(mergedLabsProfile())
+    });
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.detail || 'Could not build the month plan');
+    monthPlan = body;
+  } catch (error) {
+    monthPlanError = error.message || 'Could not build the month plan';
+  }
+  render();
+}
+
 async function loadSharedSession() {
   const jobId = currentJobId();
   if (!jobId) { sessionLoading = false; render(); return; }
@@ -548,7 +611,7 @@ async function loadSharedSession() {
     sessionLoading = false;
     render();
     if (labsPage === 'recommendations' && sessionJob.status === 'complete') loadRefinedRecommendations(jobId);
-    if (labsPage === 'plan' && sessionJob.status === 'complete') loadNavbluePlan(jobId);
+    if (labsPage === 'plan' && sessionJob.status === 'complete') { loadMonthPlan(jobId); loadNavbluePlan(jobId); }
     if (sessionJob.status === 'queued' || sessionJob.status === 'processing') setTimeout(loadSharedSession, 2000);
   } catch (_) {
     if (localStorage.getItem(latestJobKey) === jobId) localStorage.removeItem(latestJobKey);

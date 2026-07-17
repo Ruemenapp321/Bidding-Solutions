@@ -28,6 +28,7 @@ from app.airports import coterminal_group_for_airport, coterminal_payload, expan
 from app.destinations import taxonomy_payload
 from app.fatigue import build_fatigue_index
 from app.labs import labs_enabled, router as labs_router
+from app.month_planner import build_month_plan
 from app.navblue import build_navblue_layers
 from app.pay import pay_minutes_per_duty_day, pay_priority_value, tfp_per_day_away, tfp_ratio
 from app.parsers import select_parser
@@ -1703,10 +1704,24 @@ def navblue_plan(job_id: str, profile: dict[str, Any]):
     row = get_job(job_id)
     if not row or row["status"] != "complete":
         raise HTTPException(404, "Completed analysis not found")
+    if row["airline"] == "southwest":
+        raise HTTPException(400, "Southwest line bidding is not a NAVBLUE/PBS workflow.")
     results = json.loads(row["results_json"] or "[]")
     stored_profile = json.loads(row["profile_json"] or "{}")
-    merged_profile = {**stored_profile, **(profile or {})}
+    merged_profile = {**stored_profile, **(profile or {}), "airline": row["airline"]}
     return build_navblue_layers(merged_profile, results, row["filename"] or "")
+
+
+@app.post("/api/jobs/{job_id}/month-plan")
+def month_plan(job_id: str, intent: dict[str, Any]):
+    if not labs_enabled():
+        raise HTTPException(404, "CrewBidIQ Labs is not enabled")
+    row = get_job(job_id)
+    if not row or row["status"] != "complete":
+        raise HTTPException(404, "Completed analysis not found")
+    results = json.loads(row["results_json"] or "[]")
+    stored_profile = json.loads(row["profile_json"] or "{}")
+    return build_month_plan({**stored_profile, **(intent or {})}, results)
 
 
 @app.post("/api/jobs/{job_id}/diagnostic.json")
