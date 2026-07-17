@@ -358,22 +358,196 @@ function comparePage() {
     <section class="fd-compare-grid">${cards || emptyState('No trips selected', 'Choose up to four trips from Flight Deck results.')}</section>${selectionDock()}`;
 }
 
+function uniqueDetails(values) {
+  return [...new Set((Array.isArray(values) ? values : []).map(value => String(value || '').trim()).filter(Boolean))];
+}
+
+function briefingModels(item) {
+  const packageId = activePackageId();
+  return canonicalTrips(item).filter(model => model && model.package_id === packageId && model.bidable_inventory_confirmed === true);
+}
+
+function briefingPrimaryModel(item) {
+  const models = briefingModels(item);
+  if (item?.item_type === 'line') return null;
+  if (item?.canonical_trip && models.includes(item.canonical_trip)) return item.canonical_trip;
+  return models.length === 1 ? models[0] : null;
+}
+
+function briefingTerminology(item, model) {
+  if (item?.item_type === 'line' && tripAirline(item) === 'southwest') return 'Line';
+  const term = String(model?.terminology || '').toLowerCase();
+  if (term === 'rotation') return 'Rotation';
+  if (term === 'sequence') return 'Sequence';
+  return 'Pairing';
+}
+
+function briefingTitle(item, model) {
+  const term = briefingTerminology(item, model);
+  if (term === 'Rotation') return 'Rotation Briefing';
+  if (term === 'Sequence') return 'Sequence Briefing';
+  if (term === 'Line') return 'Line Briefing';
+  return 'Pairing Briefing';
+}
+
+function canonicalEventDisplay(event) {
+  if (!event) return 'Unavailable';
+  const parts = [event.local_time, event.airport, event.local_timezone].filter(value => value !== null && value !== undefined && value !== '');
+  return parts.length ? parts.join(' | ') : 'Unavailable';
+}
+
+function detailList(values, missing = 'No supported details are available.') {
+  const details = uniqueDetails(values);
+  return details.length ? `<ul>${details.map(value => `<li>${escapeHtml(value)}</li>`).join('')}</ul>` : `<p class="fd-missing">${escapeHtml(missing)}</p>`;
+}
+
+function briefingOverviewPay(model) {
+  if (!model) return '';
+  const pay = model.pay_breakdown || {};
+  const tfp = model.tfp || {};
+  const values = [];
+  if (model.airline === 'delta' && pay.total_pay !== null && pay.total_pay !== undefined) values.push(metric('Total Pay', pay.total_pay, 'fd-pay-primary'));
+  if (model.airline !== 'southwest' && pay.trip_credit !== null && pay.trip_credit !== undefined) values.push(metric('Trip Credit', pay.trip_credit));
+  if (model.airline !== 'delta' && model.airline !== 'southwest' && (pay.trip_credit === null || pay.trip_credit === undefined) && pay.total_pay !== null && pay.total_pay !== undefined) values.push(metric('Total Pay', pay.total_pay));
+  if (model.airline === 'southwest') values.push(metric('TFP', tfp.pairing_tfp ?? tfp.line_tfp ?? tfp.monthly_tfp));
+  return values.join('');
+}
+
+function operationalHighlights(model) {
+  if (!model) return '<p class="fd-missing">Canonical trip details are unavailable for this result.</p>';
+  const legs = Array.isArray(model.ordered_legs) ? model.ordered_legs : [];
+  const operatingDates = Array.isArray(model.operating_dates) ? model.operating_dates : [];
+  return `<div class="fd-fact-grid">
+    ${metric('Route', model.simplified_route)}
+    ${metric('Operating Legs', legs.length || null)}
+    ${metric('Operating Dates', operatingDates.length ? operatingDates.join(', ') : null)}
+    ${metric('Base', model.base)}
+    ${metric('Fleet / Seat', [model.fleet, model.seat].filter(Boolean).join(' / ') || null)}
+  </div>`;
+}
+
+function thingsToKnow(item) {
+  const failures = uniqueDetails(item.eligibility_violations || item.hard_failures || item.violations || []);
+  const compromises = uniqueDetails(item.compromises || []);
+  const neutral = uniqueDetails(item.neutral_attributes || []);
+  if (!failures.length && !compromises.length && !neutral.length) {
+    return '<p class="fd-missing">No additional recommendation details are available.</p>';
+  }
+  return `${failures.length ? `<div class="fd-briefing-detail fd-warning"><h3>Hard requirements not met</h3>${detailList(failures)}</div>` : ''}
+    ${compromises.length ? `<div class="fd-briefing-detail"><h3>Compromises</h3>${detailList(compromises)}</div>` : ''}
+    ${neutral.length ? `<div class="fd-briefing-detail"><h3>Neutral trip facts</h3>${detailList(neutral)}</div>` : ''}`;
+}
+
+function dutyDaySummary(models) {
+  const groups = models.map(model => {
+    const days = Array.isArray(model.duty_days) ? model.duty_days : [];
+    if (!days.length) return '';
+    const dayCards = days.map(day => {
+      const legs = Array.isArray(day.ordered_legs) ? day.ordered_legs : [];
+      const legRows = legs.length ? legs.map(leg => `<li><span>${escapeHtml(displayValue(leg.sequence_index))}</span><div><strong>${escapeHtml(displayValue(leg.origin))} &rarr; ${escapeHtml(displayValue(leg.destination))}</strong><small>${escapeHtml(displayValue(leg.local_departure_time))} - ${escapeHtml(displayValue(leg.local_arrival_time))}${leg.operating_or_deadhead === 'deadhead' ? ' | Deadhead' : ''}${leg.flight_number ? ` | Flight ${escapeHtml(leg.flight_number)}` : ''}</small></div></li>`).join('') : '<li class="fd-missing">No normalized legs are available for this duty day.</li>';
+      return `<article class="fd-duty-day"><header><div><span>Duty Day ${escapeHtml(displayValue(day.day_index))}</span><strong>${escapeHtml(displayValue(day.calendar_date, 'Date unavailable'))}</strong></div><div><small>Report</small><strong>${escapeHtml(canonicalEventDisplay(day.report_event))}</strong><small>Release</small><strong>${escapeHtml(canonicalEventDisplay(day.release_event))}</strong></div></header><ol>${legRows}</ol></article>`;
+    }).join('');
+    const showMember = models.length > 1;
+    return `<div class="fd-duty-group">${showMember ? `<h3>${escapeHtml(model.terminology || 'pairing')} ${escapeHtml(model.source_trip_number)}</h3>` : ''}${dayCards}</div>`;
+  }).filter(Boolean);
+  return groups.length ? groups.join('') : '<p class="fd-missing">Duty-day details are unavailable.</p>';
+}
+
+function layoversAndHotels(models) {
+  const layovers = models.flatMap(model => (Array.isArray(model.layovers) ? model.layovers.map(layover => ({ model, layover })) : []));
+  if (!layovers.length) return '<p class="fd-missing">No canonical layovers are available for this trip.</p>';
+  return layovers.map(({ model, layover }) => `<article class="fd-layover-card">
+    <header><strong>${escapeHtml(displayValue(layover.airport || layover.city))}</strong><span>After duty day ${escapeHtml(displayValue(layover.after_duty_day))}</span></header>
+    <div class="fd-fact-grid">
+      ${metric('Duration', layover.duration)}
+      ${metric('Start', layover.start_local)}
+      ${metric('End', layover.end_local)}
+      ${metric('Hotel', layover.hotel)}
+      ${metric('Transportation', layover.transportation)}
+      ${metric('Validation', layover.validated === true ? 'Validated' : 'Not validated')}
+    </div>${models.length > 1 ? `<small>${escapeHtml(model.terminology || 'pairing')} ${escapeHtml(model.source_trip_number)}</small>` : ''}
+  </article>`).join('');
+}
+
+function payOrTfpBreakdown(model) {
+  if (!model) return '<p class="fd-missing">A normalized pay or TFP breakdown is unavailable.</p>';
+  if (model.airline === 'southwest') {
+    const tfp = model.tfp || {};
+    const rows = [
+      ['Pairing TFP', tfp.pairing_tfp], ['Line TFP', tfp.line_tfp], ['Monthly TFP', tfp.monthly_tfp],
+      ['Carry-out TFP', tfp.carry_out_tfp], ['TFP per Duty Period', tfp.tfp_per_duty_period], ['TFP per Day Away', tfp.tfp_per_day_away],
+    ].filter(([, value]) => value !== null && value !== undefined && value !== '');
+    return rows.length ? `<div class="fd-fact-grid">${rows.map(([label, value]) => metric(label, value)).join('')}</div>` : '<p class="fd-missing">A normalized TFP breakdown is unavailable.</p>';
+  }
+  const pay = model.pay_breakdown || {};
+  const fields = [['Trip Credit', pay.trip_credit]];
+  if (model.airline === 'delta') fields.push(
+    ['EDP', pay.edp], ['HOL', pay.hol], ['SIT', pay.sit],
+    ['Additional Pay', pay.additional_pay], ['Total Pay', pay.total_pay],
+  );
+  else fields.push(['Total Pay', pay.total_pay]);
+  const availableFields = fields.filter(([, value]) => value !== null && value !== undefined && value !== '');
+  const rawTokens = uniqueDetails(pay.raw_pay_tokens);
+  const unresolved = uniqueDetails(pay.unresolved_pay_tokens);
+  if (!availableFields.length && !rawTokens.length && !unresolved.length) return '<p class="fd-missing">A normalized pay breakdown is unavailable.</p>';
+  return `<div class="fd-fact-grid">${availableFields.map(([label, value]) => metric(label, value, label === 'Total Pay' ? 'fd-pay-primary' : '')).join('')}</div>
+    ${rawTokens.length ? `<div class="fd-briefing-detail"><h3>Raw pay tokens</h3>${detailList(rawTokens)}</div>` : ''}
+    ${unresolved.length ? `<div class="fd-briefing-detail fd-warning"><h3>Unresolved pay tokens</h3>${detailList(unresolved)}</div>` : ''}`;
+}
+
+function recommendationSection(item) {
+  const qualified = uniqueDetails(item.qualification_reasons || []);
+  const matched = uniqueDetails(item.matched_preferences || []);
+  const compromises = uniqueDetails(item.compromises || []);
+  const failures = uniqueDetails(item.eligibility_violations || item.hard_failures || item.violations || []);
+  return `<div class="fd-recommendation-class"><span>Match class</span><strong class="fd-match fd-match-${matchClass(item)}">${escapeHtml(matchLabel(item))}</strong></div>
+    <div class="fd-briefing-detail"><h3>Why it qualified</h3>${detailList(qualified, 'Qualification details are unavailable.')}</div>
+    <div class="fd-briefing-detail"><h3>Matched preferences</h3>${detailList(matched, 'No matched preferences were provided.')}</div>
+    ${compromises.length ? `<div class="fd-briefing-detail"><h3>Compromises</h3>${detailList(compromises)}</div>` : ''}
+    ${failures.length ? `<div class="fd-briefing-detail fd-warning"><h3>Hard failures</h3>${detailList(failures)}</div>` : ''}`;
+}
+
+function originalAirlineTrip(models) {
+  if (!models.length) return '<p class="fd-missing">Confirmed bidable source provenance is unavailable.</p>';
+  return models.map(model => {
+    if (model.bidable_inventory_confirmed !== true) return '';
+    const sourceText = String(model.source_text || '').trim();
+    return `<article class="fd-source-record"><div class="fd-source-meta">
+      ${metric('Identifier', model.source_trip_number)}${metric('Source Page', model.source_page)}${metric('Source Section', model.source_section)}${metric('Inventory', 'Confirmed bidable inventory')}
+    </div>${sourceText ? `<pre>${escapeHtml(sourceText)}</pre>` : '<p class="fd-missing">Extracted source text is unavailable; use the source reference above.</p>'}</article>`;
+  }).filter(Boolean).join('') || '<p class="fd-missing">Confirmed bidable source provenance is unavailable.</p>';
+}
+
 function tripBriefingPage() {
   const item = resultRecords().find(record => tripId(record) === requestedTripId || sourceNumber(record) === requestedTripId);
   if (!item) return `${pageHero('TRIP BRIEFING', 'Trip unavailable', 'This trip does not belong to the active bid package or is no longer available.')}<a class="primary button" href="/labs/flight-deck">Return to results</a>`;
-  const legs = tripLegs(item);
-  const layovers = tripLayovers(item);
-  const explanation = [
-    ...(item.qualification_reasons || []), ...(item.matched_preferences || []),
-    ...(item.compromises || []), ...(item.eligibility_violations || item.hard_failures || item.violations || []),
-  ];
-  return `${pageHero('TRIP BRIEFING', `${terminology(item)} ${sourceNumber(item)}`, simplifiedRoute(item))}
-    <section class="fd-briefing-grid">
-      <article class="surface"><h2>Overview</h2><div class="fd-compare-metrics">${metric('Match', matchLabel(item))}${metric('Trip Length', tripLengthLabel(item))}${airlinePayMetrics(item)}${metric('TAFB', tripTafb(item))}${metric('Report', eventTime(item, 'report'))}${metric('Release', eventTime(item, 'release'))}</div></article>
-      <article class="surface"><h2>Why it appears</h2>${explanation.length ? `<ul>${[...new Set(explanation)].map(reason => `<li>${escapeHtml(reason)}</li>`).join('')}</ul>` : '<p>It passed inventory and package checks for the active package.</p>'}</article>
-    </section>
-    <section class="surface fd-flow"><h2>Trip Flow</h2>${legs.length ? `<ol>${legs.map((leg, index) => `<li><span>${index + 1}</span><div><strong>${escapeHtml(leg.origin || '—')} → ${escapeHtml(leg.destination || '—')}</strong><small>${escapeHtml(displayValue(leg.local_departure_time))} – ${escapeHtml(displayValue(leg.local_arrival_time))}${leg.operating_or_deadhead === 'deadhead' ? ' · Deadhead' : ''}</small></div></li>`).join('')}</ol>` : '<p>Detailed leg times are unavailable.</p>'}</section>
-    <section class="surface fd-layover-list"><h2>Layovers</h2>${layovers.length ? layovers.map(layover => `<article><strong>${escapeHtml(layoverAirport(layover))}</strong><span>${escapeHtml(displayValue(layover.duration))}</span><small>${escapeHtml(layover.hotel || 'Hotel unavailable')}${layover.transportation ? ` · ${escapeHtml(layover.transportation)}` : ''}</small></article>`).join('') : '<p>No validated layovers are available.</p>'}</section>
+  const models = briefingModels(item);
+  const model = briefingPrimaryModel(item);
+  if (!models.length) return `${pageHero('TRIP BRIEFING', 'Trip unavailable', 'Confirmed canonical bidable inventory is unavailable for this result.')}<a class="primary button" href="/labs/flight-deck">Return to results</a>`;
+  const exactExplanation = matchClass(item) === 'exact'
+    ? uniqueDetails([...(item.qualification_reasons || []), ...(item.matched_preferences || [])])
+    : uniqueDetails(item.eligibility_violations || item.hard_failures || item.violations || item.qualification_reasons || []);
+  const identifier = model?.source_trip_number || sourceNumber(item);
+  const route = model?.simplified_route || (models.length > 1 ? `${models.length} canonical pairings` : 'Route unavailable');
+  const term = briefingTerminology(item, model);
+  return `${pageHero('FLIGHT DECK', briefingTitle(item, model), `${term} ${identifier} | ${route}`)}
+    <div class="fd-briefing-layout">
+      <section class="surface fd-briefing-section fd-briefing-overview"><span class="fd-section-number">01</span><h2>Overview</h2>
+        <div class="fd-overview-identity"><span>${escapeHtml(term)}</span><strong>${escapeHtml(identifier)}</strong><em class="fd-match fd-match-${matchClass(item)}">${escapeHtml(matchLabel(item))}</em></div>
+        <div class="fd-compare-metrics">${metric('Trip Length', model?.trip_length_days ? `${model.trip_length_days} day${model.trip_length_days === 1 ? '' : 's'}` : null)}${metric('Duty Periods', model?.duty_period_count)}${metric('TAFB', model?.tafb)}${metric('Report', canonicalEventDisplay(model?.report))}${metric('Release', canonicalEventDisplay(model?.release))}${briefingOverviewPay(model)}</div>
+        <div class="fd-briefing-detail"><h3>${matchClass(item) === 'exact' ? 'Exact match explanation' : 'Match explanation'}</h3>${detailList(exactExplanation, 'A recommendation explanation is unavailable.')}</div>
+      </section>
+      <section class="surface fd-briefing-section"><span class="fd-section-number">02</span><h2>Operational Highlights</h2>${operationalHighlights(model)}</section>
+      <section class="surface fd-briefing-section"><span class="fd-section-number">03</span><h2>Things to Know</h2>${thingsToKnow(item)}</section>
+      <section class="surface fd-briefing-section fd-briefing-wide"><span class="fd-section-number">04</span><h2>Duty-Day Summary</h2>${dutyDaySummary(models)}</section>
+      <section class="surface fd-briefing-section fd-briefing-wide"><span class="fd-section-number">05</span><h2>Layovers and Hotels</h2>${layoversAndHotels(models)}</section>
+      <section class="surface fd-briefing-section"><span class="fd-section-number">06</span><h2>Pay or TFP Breakdown</h2>${payOrTfpBreakdown(model)}</section>
+      <section class="surface fd-briefing-section fd-placeholder"><span class="fd-section-number">07</span><h2>Fatigue</h2><p>No Flight Deck fatigue assessment is available for this trip.</p></section>
+      <section class="surface fd-briefing-section fd-placeholder"><span class="fd-section-number">08</span><h2>Likelihood of Holding</h2><p>No holding assessment is available for this trip.</p></section>
+      <section class="surface fd-briefing-section fd-placeholder"><span class="fd-section-number">09</span><h2>Commute Planner</h2><p>No commute plan is available for this trip.</p></section>
+      <section class="surface fd-briefing-section fd-briefing-wide"><span class="fd-section-number">10</span><h2>Recommendation</h2>${recommendationSection(item)}</section>
+      <section class="surface fd-briefing-section fd-briefing-wide"><span class="fd-section-number">11</span><h2>Original Airline Trip</h2>${originalAirlineTrip(models)}</section>
+    </div>
     <div class="fd-briefing-actions"><button type="button" data-action="shortlist" data-trip-id="${escapeHtml(tripId(item))}">Toggle Shortlist</button><button type="button" data-action="compare" data-trip-id="${escapeHtml(tripId(item))}">Toggle Compare</button><a class="primary button" href="/labs/flight-deck">Back to results</a></div>${selectionDock()}`;
 }
 
