@@ -35,6 +35,7 @@ from app.parsers import select_parser
 from app.recommendations import evaluate_recommendation, length_priority, length_score_contribution
 from app.reporting import build_bid_report
 from app.seniority import build_seniority_context, estimate_hold_outlook
+from app.southwest_planning import optimize_schedule_conflicts, rank_southwest_line
 from app.trip_intent import interpret_trip_intent, trip_intent_profile
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -1326,7 +1327,7 @@ def score_southwest_line(line: dict[str, Any], pairing_scores: dict[str, dict[st
     reasons = []
     for item in members:
         reasons.extend(item.get("reasons", []))
-    score = round(sum(x["score"] for x in members) / len(members), 1)
+    profile = profile or {}
     conflicts = sorted(set(c for x in members for c in x.get("calendar_conflicts", [])))
     touched = list(dict.fromkeys(c for item in members for c in item.get("touched_cities", [])))
     duty_legs = [count for item in members for count in item.get("duty_legs", [])]
@@ -1336,8 +1337,8 @@ def score_southwest_line(line: dict[str, Any], pairing_scores: dict[str, dict[st
         for leg in item.get("redeye_legs", [])
     ]
     result = {
-        "pairing": line["id"], "item_type": "line", "score": score,
-        "dates": [], "cities": cities, "touched_cities": touched, "preferred_aircraft": sorted(set(a for item in members for a in item.get("preferred_aircraft", []))),
+        "pairing": line["id"], "item_type": "line", "score": 0.0,
+        "dates": line.get("work_dates") or [], "cities": cities, "touched_cities": touched, "preferred_aircraft": sorted(set(a for item in members for a in item.get("preferred_aircraft", []))),
         "redeye": "WOCL departure" if redeye_legs else "none", "redeye_legs": redeye_legs,
         "deadheads": sum(x.get("deadheads", 0) for x in members), "transfers": sorted(set(t for x in members for t in x.get("transfers", []))),
         "calendar_conflicts": conflicts,
@@ -1351,10 +1352,22 @@ def score_southwest_line(line: dict[str, Any], pairing_scores: dict[str, dict[st
         "tfp_per_day_away": line.get("tfp_per_day_away"),
         "layovers": layovers, "legs": [leg for item in members for leg in item.get("legs", [])], "pairing_ids": line["pairing_ids"],
         "duty_legs": duty_legs, "first_day_legs": duty_legs[0] if duty_legs else 0, "last_day_legs": duty_legs[-1] if duty_legs else 0,
-        "match_level": match_level(score, conflicts), "display_label": get_airline_terminology("southwest").singular, "original_display": line.get("block", ""),
+        "match_level": "fair", "display_label": get_airline_terminology("southwest").singular, "original_display": line.get("block", ""),
         "airline": "southwest", "data_quality": "complete",
     }
-    preference = str((profile or {}).get("pay_priority") or "")
+    result.update(rank_southwest_line(line, members, profile))
+    result["match_level"] = match_level(result["score"], conflicts)
+    result["fatigue_index"] = build_fatigue_index(result)
+    result["seniority_context"] = build_seniority_context(profile.get("seniority_context"))
+    result["hold_outlook"] = estimate_hold_outlook(result, result["seniority_context"])
+    conflict_events = profile.get("fixed_events") or []
+    if conflict_events:
+        result["schedule_conflict_analysis"] = optimize_schedule_conflicts(
+            result,
+            conflict_events,
+            str(profile.get("conflict_mode") or "protect"),
+        )
+    preference = str(profile.get("pay_priority") or "")
     result["pay_priority"] = preference or None
     result["pay_priority_value"] = pay_priority_value(result, preference)
     labels = {"monthly_tfp": "Monthly TFP", "tfp_per_duty_period": "TFP per duty period", "tfp_per_day_away": "TFP efficiency"}

@@ -307,7 +307,9 @@ function mergedLabsProfile() {
     training: draft.training ? split(draft.training) : [],
     carry_in: draft.carryIn ? split(draft.carryIn) : [],
     carry_out: draft.carryOut ? split(draft.carryOut) : [],
-    risk_tolerance: draft.riskTolerance || 'balanced'
+    risk_tolerance: draft.riskTolerance || 'balanced',
+    fixed_events: draft.fixedEvents || [],
+    conflict_mode: draft.conflictMode || 'protect'
   };
 }
 
@@ -329,11 +331,47 @@ function planPage() {
 
 function southwestPage() {
   const ready = sessionJob?.status === 'complete' && sessionJob.airline === 'southwest';
+  const draft = readJson(draftKey, {}) || {};
   return `${pageHeader('SOUTHWEST LABS', 'Build a line strategy around your life', 'Upload a Southwest package here, rank lines with TFP-aware preferences, and prepare conflict analysis.')}
     ${packageCard()}
     ${uploadPanel()}
     ${postParseActions()}
-    ${ready ? `<section class="labs-action-grid"><a id="schedule" href="/labs/build" class="labs-action-card primary-action"><span>01</span><h2>Set Line Preferences</h2><p>Define TFP, days off, workload, and overnight priorities.</p><strong>Open preferences</strong></a><a id="conflicts" href="/labs/recommendations" class="labs-action-card"><span>02</span><h2>Optimize Conflicts</h2><p>Review line recommendations against your current schedule and protected dates.</p><strong>Review lines</strong></a></section>` : `<section class="surface labs-feature-empty"><h2>Upload a Southwest package to begin</h2><p>Use one airline ZIP or the individual Pairings and Lines TXT files above.</p></section>`}`;
+    ${ready ? `<section class="labs-action-grid"><a id="schedule" href="/labs/build" class="labs-action-card primary-action"><span>01</span><h2>Set Line Preferences</h2><p>Define TFP, days off, workload, and overnight priorities.</p><strong>Open preferences</strong></a><a id="conflicts" href="/labs/recommendations" class="labs-action-card"><span>02</span><h2>Optimize Conflicts</h2><p>Review line recommendations against your current schedule and protected dates.</p><strong>Review lines</strong></a></section><section class="surface southwest-schedule"><div class="surface-title"><div><div><h2>Current schedule and fixed events</h2><p>Enter dates manually or load a simple TXT file with rows such as “vacation: 2026-08-11, 2026-08-12”.</p></div></div></div><div class="labs-form-grid"><label>Optimization mode<select id="swConflictMode"><option value="protect">Protect my schedule</option><option value="maximize_conflicts">Maximize conflicts for potential pay</option><option value="maximize_vacation_extension">Maximize vacation extension</option><option value="avoid_all">Avoid all conflicts</option><option value="custom">Custom</option></select></label><label>Carry-out pairing dates<input id="swCarryOutDates" value="${escapeHtml(draft.swCarryOutDates || '')}" placeholder="2026-08-01"></label><label>Vacation dates<input id="swVacationDates" value="${escapeHtml(draft.swVacationDates || '')}" placeholder="2026-08-11, 2026-08-12"></label><label>Training dates<input id="swTrainingDates" value="${escapeHtml(draft.swTrainingDates || '')}"></label><label>Known absence dates<input id="swAbsenceDates" value="${escapeHtml(draft.swAbsenceDates || '')}"></label><label>Other fixed event dates<input id="swOtherDates" value="${escapeHtml(draft.swOtherDates || '')}"></label><label>Optional schedule TXT<input id="swScheduleFile" type="file" accept=".txt,text/plain"></label></div><div class="labs-builder-actions"><span id="swScheduleStatus" class="draft-status"></span><button id="saveSwSchedule" class="primary" type="button">Save schedule context</button></div></section>` : `<section class="surface labs-feature-empty"><h2>Upload a Southwest package to begin</h2><p>Use one airline ZIP or the individual Pairings and Lines TXT files above.</p></section>`}`;
+}
+
+function bindSouthwestSchedule() {
+  const button = document.getElementById('saveSwSchedule');
+  if (!button) return;
+  const draft = readJson(draftKey, {}) || {};
+  document.getElementById('swConflictMode').value = draft.conflictMode || 'protect';
+  button.addEventListener('click', async () => {
+    const fields = [
+      ['carry_out', 'swCarryOutDates', 'swCarryOutDates'],
+      ['vacation', 'swVacationDates', 'swVacationDates'],
+      ['training', 'swTrainingDates', 'swTrainingDates'],
+      ['known_absence', 'swAbsenceDates', 'swAbsenceDates'],
+      ['other', 'swOtherDates', 'swOtherDates']
+    ];
+    const events = [];
+    const updates = {};
+    fields.forEach(([type, id, key]) => {
+      const raw = document.getElementById(id).value.trim(); updates[key] = raw;
+      const dates = raw.split(',').map(value => value.trim()).filter(Boolean);
+      if (dates.length) events.push({ type, dates });
+    });
+    const file = document.getElementById('swScheduleFile').files[0];
+    if (file) {
+      const text = await file.text();
+      text.split(/\r?\n/).forEach(row => {
+        const [type, values] = row.split(':', 2);
+        const dates = String(values || '').split(',').map(value => value.trim()).filter(Boolean);
+        if (type?.trim() && dates.length) events.push({ type: type.trim().toLowerCase().replace(/\s+/g, '_'), dates });
+      });
+    }
+    const next = { ...draft, ...updates, fixedEvents: events, conflictMode: document.getElementById('swConflictMode').value, savedAt: new Date().toISOString() };
+    localStorage.setItem(draftKey, JSON.stringify(next));
+    document.getElementById('swScheduleStatus').textContent = `${events.length} fixed event groups saved. Rerun recommendations to apply them.`;
+  });
 }
 
 function render() {
@@ -343,6 +381,7 @@ function render() {
   document.querySelectorAll('[data-labs-route]').forEach(link => link.classList.toggle('active', link.dataset.labsRoute === route));
   bindBuilder();
   bindUploader();
+  bindSouthwestSchedule();
 }
 
 function showLabsUploadError(message) {
