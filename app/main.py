@@ -216,7 +216,7 @@ def inferred_stage(message: str, status: str = "") -> str:
         return "parsing_details"
     if "normaliz" in lowered:
         return "normalizing"
-    if "scoring" in lowered or "recommendation" in lowered:
+    if "scoring" in lowered or "recommendation" in lowered or "summary" in lowered or "serializ" in lowered:
         return "building_recommendations"
     return "detecting_package"
 

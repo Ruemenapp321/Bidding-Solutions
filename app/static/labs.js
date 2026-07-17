@@ -169,20 +169,54 @@ const processingStages = [
   ['building_recommendations', 'Building recommendation data'],
   ['ready', 'Ready']
 ];
+const processingStageIndex = new Map(processingStages.map(([value], index) => [value, index]));
+const stageLabelByValue = new Map(processingStages.map(([value, label]) => [value, label]));
+
+function stageFromProgress(progress = 0) {
+  const value = Number(progress) || 0;
+  if (value >= 85) return 'building_recommendations';
+  if (value >= 72) return 'normalizing';
+  if (value >= 67) return 'parsing_details';
+  if (value >= 65) return 'identifying_records';
+  if (value >= 15) return 'extracting_text';
+  if (value >= 1) return 'queued';
+  return 'detecting_package';
+}
+
+function resolveStage(job) {
+  const fromRecord = job?.current_stage || job?.stage || storedAnalysis()?.current_stage || storedAnalysis()?.stage;
+  return fromRecord || stageFromProgress(job?.progress_percent ?? job?.progress ?? 0);
+}
+
+function normalizeStageLabel(stage, fallback = '') {
+  return stageLabelByValue.get(stage) || fallback || stage.replace(/_/g, ' ');
+}
+
+function elapsedSeconds(job) {
+  const explicit = Number(job?.elapsed_seconds);
+  if (Number.isFinite(explicit) && explicit >= 0) return explicit;
+  const createdAt = String(job?.created_at || '').trim();
+  if (!createdAt) return 0;
+  const parsed = Date.parse(createdAt.endsWith('Z') ? createdAt : `${createdAt}Z`);
+  if (!Number.isFinite(parsed)) return 0;
+  return Math.max(0, Math.floor((Date.now() - parsed) / 1000));
+}
 
 function uploadProgressPanel() {
   if (!labsUploadBusy && !sessionJob) return '';
-  const stage = labsUploadBusy ? 'uploading' : (sessionJob?.current_stage || sessionJob?.stage || (sessionJob?.status === 'complete' ? 'ready' : 'detecting_package'));
-  const activeIndex = processingStages.findIndex(([value]) => value === stage);
+  const stage = labsUploadBusy ? 'uploading' : resolveStage(sessionJob);
+  const activeIndex = processingStageIndex.get(stage) ?? processingStageIndex.get(stageFromProgress(sessionJob?.progress_percent ?? sessionJob?.progress ?? 0)) ?? 0;
   const percent = labsUploadBusy ? null : Math.max(lastConfirmedProgress, Number(sessionJob?.progress_percent ?? sessionJob?.progress ?? 0));
   const pageDetail = sessionJob?.pages_total ? `Page ${sessionJob.pages_processed} of ${sessionJob.pages_total}` : '';
   const fileDetail = sessionJob?.files_total ? `File ${sessionJob.files_processed} of ${sessionJob.files_total}` : '';
   const packageName = airlineName(sessionJob?.airline);
   const stopped = ['failed', 'expired', 'stale', 'cancelled'].includes(sessionJob?.state) || stage === 'failed';
   const canResume = stopped || sessionJob?.state === 'reconnecting';
+  const stageLabel = sessionJob?.stage_label || normalizeStageLabel(stage, labsUploadBusy ? 'Uploading file' : (sessionJob?.user_message || sessionJob?.message || 'Preparing package'));
+  const elapsed = elapsedSeconds(sessionJob);
   const debug = window.CREWBIDIQ_ANALYSIS_DEBUG_ENABLED === true ? `<dl class="analysis-debug"><dt>Package ID</dt><dd>${escapeHtml(activePackageId() || '—')}</dd><dt>Job ID</dt><dd>${escapeHtml(currentJobId() || '—')}</dd><dt>State</dt><dd>${escapeHtml(sessionJob?.state || 'idle')}</dd><dt>Last confirmed progress</dt><dd>${escapeHtml(percent || 0)}%</dd><dt>Last successful poll</dt><dd>${escapeHtml(sessionJob?.last_successful_poll_at || '—')}</dd><dt>Latest status</dt><dd>${escapeHtml(latestStatusCode ?? '—')}</dd><dt>Retry count</dt><dd>${escapeHtml(sessionPollFailures)}</dd></dl>` : '';
   return `<div class="labs-processing ${stopped ? 'failed' : ''}">
-    <div class="labs-processing-heading"><div><span>${stopped ? 'Analysis needs attention' : `Processing ${escapeHtml(packageName)} bid package`}</span><strong>${escapeHtml(sessionJob?.stage_label || (labsUploadBusy ? 'Uploading file' : sessionJob?.user_message || sessionJob?.message || 'Preparing package'))}</strong><small>${escapeHtml(pageDetail || fileDetail || sessionJob?.user_message || sessionJob?.message || 'Your progress is saved if you move to another Labs page.')}</small></div><div><strong>${percent == null ? '—' : `${escapeHtml(percent)}%`}</strong><small>${escapeHtml(sessionJob?.elapsed_seconds || 0)}s elapsed</small></div></div>
+    <div class="labs-processing-heading"><div><span>${stopped ? 'Analysis needs attention' : `Processing ${escapeHtml(packageName)} bid package`}</span><strong>${escapeHtml(stageLabel)}</strong><small>${escapeHtml(pageDetail || fileDetail || sessionJob?.user_message || sessionJob?.message || 'Your progress is saved if you move to another Labs page.')}</small></div><div><strong>${percent == null ? '—' : `${escapeHtml(percent)}%`}</strong><small>${escapeHtml(elapsed)}s elapsed</small></div></div>
     <div class="progress"><i style="width:${Math.max(0, Math.min(Number(percent) || (labsUploadBusy ? 4 : 0), 100))}%"></i></div>
     <ol class="labs-stage-list">${processingStages.map(([value, label], index) => `<li class="${index < activeIndex ? 'done' : (index === activeIndex ? 'active' : '')}"><span>${index + 1}</span>${escapeHtml(label)}</li>`).join('')}</ol>
     ${stopped ? `<div class="labs-upload-error"><strong>${escapeHtml(sessionJob?.user_message || sessionJob?.error || 'The server could not analyze this package.')}</strong><p>Resume the saved analysis, select the airline manually, or upload the package again.</p></div>` : ''}
@@ -743,8 +777,23 @@ async function fetchSharedJob() {
 }
 function applySharedJob(body) {
   const jobId = body.job_id, state = sharedJobState(body);
+  const previous = sessionJob || storedAnalysis() || {};
   lastConfirmedProgress = Math.max(lastConfirmedProgress, Number(body.progress_percent ?? body.progress ?? 0)); sessionPollFailures = 0;
-  sessionJob = { ...body, state, progress: lastConfirmedProgress, progress_percent: lastConfirmedProgress };
+  const incomingStage = resolveStage(body);
+  const previousStage = resolveStage(previous);
+  const incomingIndex = processingStageIndex.get(incomingStage) ?? -1;
+  const previousIndex = processingStageIndex.get(previousStage) ?? -1;
+  const stage = incomingIndex >= previousIndex ? incomingStage : previousStage;
+  sessionJob = {
+    ...previous,
+    ...body,
+    state,
+    current_stage: stage,
+    stage_label: body.stage_label || normalizeStageLabel(stage, previous.stage_label || ''),
+    elapsed_seconds: Math.max(Number(body.elapsed_seconds || 0), elapsedSeconds(previous)),
+    progress: lastConfirmedProgress,
+    progress_percent: lastConfirmedProgress,
+  };
   acceptPackageResponse(sessionJob); persistAnalysis(sessionJob); sessionLoading = false; render();
   if (state === 'completed' || body.status === 'complete') {
     safeLocalStorageSetItem(latestJobKey, jobId); safeLocalStorageRemoveItem(activeJobKey); safeLocalStorageRemoveItem(analysisStateKey);
@@ -760,7 +809,19 @@ function handleSharedFailure(error) {
     sessionJob = null; labsUploadError = 'The upload was not saved. Please upload the bid package again.'; render(); return;
   }
   if (status === 404 || status === 410) {
-    sessionJob = { ...(sessionJob || storedAnalysis()), state: status === 410 ? 'expired' : 'stale', current_stage: status === 410 ? 'expired' : 'stale', progress: lastConfirmedProgress, progress_percent: lastConfirmedProgress, error_code: code, user_message: error.message, recoverable: error.detail?.recoverable !== false };
+    const previous = sessionJob || storedAnalysis() || {};
+    sessionJob = {
+      ...previous,
+      state: status === 410 ? 'expired' : 'stale',
+      current_stage: status === 410 ? 'expired' : resolveStage(previous),
+      stage_label: status === 410 ? 'Expired' : normalizeStageLabel(resolveStage(previous), previous.stage_label || ''),
+      elapsed_seconds: elapsedSeconds(previous),
+      progress: lastConfirmedProgress,
+      progress_percent: lastConfirmedProgress,
+      error_code: code,
+      user_message: error.message,
+      recoverable: error.detail?.recoverable !== false,
+    };
     persistAnalysis(sessionJob); clearTimeout(sessionPollTimer); render(); return;
   }
   if (status === 401 || status === 403 || status === 409 || status === 400) {
@@ -768,7 +829,20 @@ function handleSharedFailure(error) {
     sessionJob = null; labsUploadError = `${error.message} Please upload the bid package again.`; render(); return;
   }
   sessionPollFailures += 1;
-  sessionJob = { ...(sessionJob || storedAnalysis()), state: 'reconnecting', current_stage: sessionJob?.current_stage || 'detecting_package', progress: lastConfirmedProgress, progress_percent: lastConfirmedProgress, error_code: status === 429 ? 'RATE_LIMITED' : 'POLLING_NETWORK_ERROR', user_message: `Connection interrupted. Last confirmed progress: ${lastConfirmedProgress}%.`, retry_count: sessionPollFailures };
+  const previous = sessionJob || storedAnalysis() || {};
+  const stage = resolveStage(previous);
+  sessionJob = {
+    ...previous,
+    state: 'reconnecting',
+    current_stage: stage,
+    stage_label: normalizeStageLabel(stage, previous.stage_label || ''),
+    elapsed_seconds: elapsedSeconds(previous),
+    progress: lastConfirmedProgress,
+    progress_percent: lastConfirmedProgress,
+    error_code: status === 429 ? 'RATE_LIMITED' : 'POLLING_NETWORK_ERROR',
+    user_message: `Connection interrupted. Last confirmed progress: ${lastConfirmedProgress}%.`,
+    retry_count: sessionPollFailures,
+  };
   persistAnalysis(sessionJob); render();
   if (sessionPollFailures <= 6) scheduleSharedPoll(Math.min(2000 * (2 ** (sessionPollFailures - 1)), 15000));
 }

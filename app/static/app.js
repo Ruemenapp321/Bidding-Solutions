@@ -212,6 +212,16 @@ $('analyzeBtn').addEventListener('click', async () => {
 });
 
 function schedulePoll(delay = 1500) { clearTimeout(pollTimer); pollTimer = setTimeout(() => pollJob(), delay); }
+function inferredStageFromProgress(progress = 0) {
+  const value = Number(progress) || 0;
+  if (value >= 85) return 'building_recommendations';
+  if (value >= 72) return 'normalizing';
+  if (value >= 67) return 'parsing_details';
+  if (value >= 65) return 'identifying_records';
+  if (value >= 15) return 'extracting_text';
+  if (value >= 1) return 'queued';
+  return 'detecting_package';
+}
 function stateFromJob(body) {
   if (body.state) return body.state;
   return body.status === 'complete' ? 'completed' : body.status === 'failed' ? 'failed' : body.status === 'queued' ? 'queued' : 'parsing';
@@ -270,7 +280,14 @@ function handlePollFailure(error) {
   pollFailures += 1;
   const safe = analysisState.package_persisted === true ? 'Your saved upload is recoverable. ' : '';
   const message = `${safe}Connection interrupted. Last confirmed progress: ${lastConfirmedProgress}%.`;
-  persistAnalysisState({ state: 'reconnecting', error_code: status === 429 ? 'RATE_LIMITED' : 'POLLING_NETWORK_ERROR', retry_count: pollFailures, latest_status_code: latestStatusCode });
+  persistAnalysisState({
+    state: 'reconnecting',
+    current_stage: analysisState.current_stage || inferredStageFromProgress(lastConfirmedProgress),
+    stage_label: analysisState.stage_label || analysisState.message || 'Building recommendation data',
+    error_code: status === 429 ? 'RATE_LIMITED' : 'POLLING_NETWORK_ERROR',
+    retry_count: pollFailures,
+    latest_status_code: latestStatusCode,
+  });
   setJob(true, 'Reconnecting', lastConfirmedProgress, message);
   if (pollFailures <= MAX_POLL_RETRIES) schedulePoll(Math.min(1500 * (2 ** (pollFailures - 1)), 15000));
   else { clearTimeout(pollTimer); $('analyzeBtn').disabled = false; $('analyzeBtn').textContent = 'Resume analysis'; showError('The connection could not be restored automatically. Tap Resume analysis to check the saved job now.'); }
