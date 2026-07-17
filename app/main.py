@@ -25,11 +25,14 @@ from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from app.airlines import airline_terminology_payload, get_airline_terminology
 from app.airports import coterminal_group_for_airport, coterminal_payload, expand_airports
+from app.destinations import taxonomy_payload
 from app.labs import labs_enabled, router as labs_router
 from app.navblue import build_navblue_layers
 from app.pay import pay_minutes_per_duty_day, pay_priority_value, tfp_per_day_away, tfp_ratio
 from app.parsers import select_parser
+from app.recommendations import evaluate_recommendation, length_priority, length_score_contribution
 from app.reporting import build_bid_report
+from app.trip_intent import interpret_trip_intent, trip_intent_profile
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = Path(os.environ.get("DATA_DIR", BASE_DIR / "data"))
@@ -233,7 +236,7 @@ INDEX_HTML = r"""
           <label>Highest-priority layovers<input id="eliteCities" placeholder="SAN, HNL, BOS"></label>
           <label>Preferred layovers<input id="secondaryCities" placeholder="SEA, PDX, MIA"></label>
           <label>Avoid layovers<input id="penaltyCities" placeholder="DFW, IAH"></label>
-          <label>Preferred trip lengths<input id="preferredTripLengths" placeholder="2, 3, 4"></label>
+          <label>Trip length priority (best to least)<input id="preferredTripLengths" placeholder="6+, 5, 4, 3, 2, 1"><small>Order matters. This is a preference, not an automatic hard filter.</small></label>
           <label>Earliest report<input id="earliestReport" type="time"></label>
           <label>Latest release<input id="latestRelease" type="time"></label>
           <label>Base / co-terminal group<input id="baseAirport" placeholder="ATL or NYC"></label>
@@ -293,6 +296,10 @@ INDEX_HTML = r"""
           <div><span>Fatigue</span><strong id="snapshotFatigue">—</strong></div>
         </div>
         <div id="results" class="ranked-list"><div class="empty-state"><span>✈</span><strong>No results yet</strong><p>Your ranked rotations will appear here.</p></div></div>
+        <section id="nearMatchesPanel" class="near-matches hidden">
+          <div class="near-matches-heading"><div><span class="kicker">CLOSEST AVAILABLE</span><h3>Near Matches</h3><p>These trips miss at least one requirement. CrewBidIQ shows exactly what must be relaxed.</p></div></div>
+          <div id="nearResults" class="ranked-list"></div>
+        </section>
       </section>
 
       <section id="guide" class="surface guide-panel hidden">
@@ -327,7 +334,7 @@ INDEX_HTML = r"""
               <li><strong>Highest-priority layovers:</strong> gives a dominant positive preference to sequences that overnight in those cities. A required-day conflict can still place one lower.</li>
               <li><strong>Preferred layovers:</strong> gives a smaller positive preference to desirable overnight cities.</li>
               <li><strong>Avoid layovers:</strong> lowers sequences that overnight in those cities. Airports merely touched while operating are not treated as layovers.</li>
-              <li><strong>Preferred trip lengths:</strong> favors the listed number of duty days, such as 2, 3, or 4.</li>
+              <li><strong>Trip length priority:</strong> ranks trip lengths from best to least, such as 6+, 5, 4, 3, 2, 1. It remains a soft preference unless you explicitly make a length required in Labs.</li>
               <li><strong>Minimum layover hours:</strong> lowers a result for each overnight shorter than the entered minimum.</li>
             </ul>
           </article>
@@ -372,8 +379,8 @@ INDEX_HTML = r"""
         <div class="guide-grid">
           <article class="guide-card">
             <h4>Rating and rank</h4>
-            <p><strong>★★★★★ Excellent, ★★★★ Strong, ★★★ Good, ★★ Fair, and ★ Low</strong> summarize how closely each result follows your preferences. The internal score orders the list; the stars are the pilot-facing summary. A required-day conflict always produces Low.</p>
-            <p><strong>Why it matched</strong> names the preference signals, workload limits, and conflicts that affected the recommendation so you can understand the rank.</p>
+            <p><strong>Exact Match, Strong Match, and Partial Match</strong> describe eligible trips. <strong>Near Match</strong> is shown separately when a trip misses a hard requirement.</p>
+            <p><strong>Why it matched</strong> separates matched preferences, compromises, and neutral trip facts. Near Matches list the exact requirement that would need to be relaxed.</p>
           </article>
 
           <article class="guide-card">
@@ -502,6 +509,17 @@ def airline_terminology() -> dict[str, dict[str, str]]:
 @app.get("/api/airlines/coterminals")
 def airline_coterminals() -> dict[str, dict[str, list[str]]]:
     return coterminal_payload()
+
+
+@app.get("/api/destinations")
+def destinations() -> dict[str, Any]:
+    return {"groups": taxonomy_payload()}
+
+
+@app.post("/api/trip-intent")
+def parse_trip_intent(payload: dict[str, Any]) -> dict[str, Any]:
+    intent = interpret_trip_intent(str(payload.get("text") or ""))
+    return {"intent": intent, "profile": trip_intent_profile(intent)}
 
 
 def extract_text(
@@ -885,17 +903,18 @@ def build_bid_synopsis(pairings: list[dict[str, Any]]) -> dict[str, Any]:
 def sort_results(results: list[dict[str, Any]]) -> None:
     def key(item: dict[str, Any]) -> tuple[Any, ...]:
         complete = item.get("data_quality") != "incomplete"
-        hard_conflict = any(
-            str(value).startswith("Required off:") for value in item.get("calendar_conflicts", [])
-        )
+        eligible = bool(item.get("eligible", True))
+        match_order = {"exact": 3, "strong": 2, "partial": 1, "near": 0}
+        length_preference = bool(item.get("trip_length_preference_active"))
+        length_rank = item.get("length_priority_rank")
+        length_order = 0 if not length_preference else -(int(length_rank) if length_rank is not None else 10_000)
         pay_preference = bool(item.get("pay_priority"))
         pay_value = item.get("pay_priority_value")
-        length_preference = bool(item.get("trip_length_preference_active"))
-        preferred_length_match = not length_preference or bool(item.get("trip_length_match"))
         return (
             complete,
-            not hard_conflict,
-            preferred_length_match,
+            eligible,
+            length_order,
+            match_order.get(str(item.get("match_class")), 0),
             pay_preference and pay_value is not None,
             pay_value if pay_preference and pay_value is not None else float("-inf"),
             item.get("score", 0),
@@ -1050,10 +1069,14 @@ def score_pairing(pairing: dict[str, Any], profile: dict[str, Any]) -> dict[str,
         duty_counts[duty_labels.index(day)] += 1
 
     trip_length = pairing_trip_length(pairing)
-    preferred_lengths = {int(x) for x in list_field(profile.get("preferred_trip_lengths")) if x.isdigit()}
-    if trip_length and trip_length in preferred_lengths:
-        score += 18
-        reasons.append(f"Matches your preferred {trip_length}-day trip length")
+    ranked_lengths = length_priority(profile)
+    length_points, length_rank, length_reason = length_score_contribution(trip_length, profile)
+    score += length_points
+    if length_rank is not None:
+        if profile.get("trip_length_priority"):
+            reasons.append(length_reason)
+        else:
+            reasons.append(f"Matches your preferred {trip_length}-day trip length")
     limits = (("max_legs_per_day", max(duty_counts, default=0), "maximum legs in a duty day"), ("max_first_day_legs", duty_counts[0] if duty_counts else 0, "first-day legs"), ("max_last_day_legs", duty_counts[-1] if duty_counts else 0, "last-day legs"))
     for key, actual, label in limits:
         limit = profile.get(key)
@@ -1108,9 +1131,11 @@ def score_pairing(pairing: dict[str, Any], profile: dict[str, Any]) -> dict[str,
         "legs": result_legs,
         "duty_legs": duty_counts,
         "trip_length": trip_length,
-        "trip_length_preference_active": bool(preferred_lengths),
-        "trip_length_match": bool(preferred_lengths and trip_length in preferred_lengths),
-        "preferred_trip_lengths": sorted(preferred_lengths),
+        "trip_length_preference_active": bool(ranked_lengths),
+        "trip_length_match": bool(ranked_lengths and length_rank is not None),
+        "trip_length_priority": ranked_lengths,
+        "length_priority_rank": length_rank,
+        "preferred_trip_lengths": ranked_lengths,
         "first_day_legs": duty_counts[0] if duty_counts else 0,
         "last_day_legs": duty_counts[-1] if duty_counts else 0,
         "item_type": "pairing",
@@ -1180,6 +1205,19 @@ def score_pairing(pairing: dict[str, Any], profile: dict[str, Any]) -> dict[str,
         result["pay_explanation"] = f"{labels.get(preference, preference)}: {result.get(preference)}"
     else:
         result["pay_explanation"] = None
+    result.update(evaluate_recommendation(result, profile))
+    if os.environ.get("RECOMMENDATION_DEBUG_ENABLED", "false").lower() == "true":
+        result["recommendation_debug"] = {
+            "parser": result.get("parser"),
+            "parser_confidence": result.get("parser_confidence"),
+            "normalization": pairing.get("normalization_diagnostics"),
+            "eligibility_result": result.get("eligibility_result"),
+            "eligibility_violations": result.get("eligibility_violations"),
+            "trip_length": trip_length,
+            "trip_length_priority": ranked_lengths,
+            "length_priority_rank": length_rank,
+            "length_score_contribution": length_points,
+        }
     return result
 
 

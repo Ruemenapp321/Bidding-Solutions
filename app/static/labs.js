@@ -14,6 +14,9 @@ let labsUploadError = '';
 let refinedRecommendationsLoading = false;
 let refinedRecommendationsError = '';
 let refinedRecommendationsSignature = '';
+let tripIntentResult = null;
+let tripIntentLoading = false;
+let tripIntentError = '';
 
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, character => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
@@ -157,15 +160,19 @@ function builderPage() {
   const classic = readJson('crewbidiqProfile', {});
   const draft = readJson(draftKey, {}) || {};
   const value = (key, profileKey = key) => draft[key] ?? (Array.isArray(classic[profileKey]) ? classic[profileKey].join(', ') : classic[profileKey]) ?? '';
+  const tripLengths = draft.tripLengths ?? (classic.trip_length_priority || classic.preferred_trip_lengths || []).join(', ');
+  const intent = tripIntentResult || draft.tripIntentResult;
+  const intentReview = tripIntentLoading ? '<div class="intent-review"><strong>Interpreting your trip request...</strong></div>' : tripIntentError ? `<div class="intent-review error">${escapeHtml(tripIntentError)}</div>` : intent ? `<div class="intent-review"><div><strong>Review what CrewBidIQ understood</strong><p>${(intent.intent.interpreted_summary || []).map(escapeHtml).join(' · ')}</p>${intent.intent.assumptions?.length ? `<small>Assumptions to review: ${intent.intent.assumptions.map(escapeHtml).join(' · ')}</small>` : ''}</div><button id="applyLabsIntent" class="secondary" type="button">Apply these preferences</button></div>` : '';
   return `${pageHeader('GUIDED BID BUILDER', 'Build around the life you want', 'Set the few priorities that should shape your bid. Labs saves this draft on this device.')}
     ${packageCard()}
     ${uploadPanel()}
     <section class="surface labs-builder">
+      <div class="natural-language-builder"><span class="kicker">DESCRIBE THE TRIP YOU WANT</span><h2>Use plain language</h2><p>Example: “4-day Hawaii trips, one leg home, no redeyes, report after 09:00.” CrewBidIQ will show its interpretation before applying anything.</p><textarea id="labsIntentText" placeholder="Describe the trip that would fit your life...">${escapeHtml(value('intentText'))}</textarea><div><button id="interpretLabsIntent" class="secondary" type="button">Review interpretation</button></div>${intentReview}</div>
       <div class="surface-title"><div><span class="labs-step">1</span><div><h2>Define your month</h2><p>Start with what matters most. You can refine the details later.</p></div></div><span id="draftStatus" class="draft-status">Draft on this device</span></div>
       <div class="labs-form-grid">
         <label>Primary goal<select id="labsFocus"><option value="quality">Quality of life</option><option value="days_off">Protect days off</option><option value="layovers">Preferred layovers</option><option value="credit">${escapeHtml(payGoalLabel())}</option><option value="commute">Commute-friendly trips</option></select></label>
         <label>Required days off<input id="labsRequiredDays" value="${escapeHtml(value('requiredDays', 'required_days_off'))}" placeholder="8/11, 8/18"></label>
-        <label>Preferred trip lengths<input id="labsTripLengths" value="${escapeHtml(value('tripLengths', 'preferred_trip_lengths'))}" placeholder="2, 3, 4"></label>
+        <label>Trip length priority (best to least)<input id="labsTripLengths" value="${escapeHtml(tripLengths)}" placeholder="6+, 5, 4, 3, 2, 1"></label>
         <label>Highest-priority layovers<input id="labsLayovers" value="${escapeHtml(value('layovers', 'elite_cities'))}" placeholder="HNL, OGG, LIH"></label>
         <label>Avoid layovers<input id="labsAvoidLayovers" value="${escapeHtml(value('avoidLayovers', 'penalty_cities'))}" placeholder="DFW, IAH"></label>
         <label>Maximum legs per duty day<input id="labsMaxLegs" type="number" min="1" value="${escapeHtml(value('maxLegs', 'max_legs_per_day'))}" placeholder="3"></label>
@@ -183,13 +190,13 @@ function emptyFeature(message) {
 }
 
 function matchLabel(item) {
-  return ({ excellent: 'Excellent', strong: 'Strong', good: 'Good', fair: 'Fair', low: 'Low' })[item.match_level] || 'Match';
+  return item.match_label || ({ excellent: 'Excellent', strong: 'Strong', good: 'Good', fair: 'Fair', low: 'Low' })[item.match_level] || 'Match';
 }
 
 function recommendationCards(results) {
   return results.slice(0, 8).map((item, index) => {
     const layovers = (item.layovers || []).map(layover => layover.city).join(', ') || 'No overnights';
-    const reasons = (item.reasons || []).slice(0, 3);
+    const reasons = (item.matched_preferences || item.reasons || []).slice(0, 3);
     const pay = resultPay(item);
     return `<article class="labs-recommendation">
       <div class="labs-rank">${index + 1}</div>
@@ -202,11 +209,13 @@ function recommendationCards(results) {
 function recommendationsPage() {
   const ready = sessionJob?.status === 'complete';
   const results = sessionJob?.results || [];
+  const eligible = results.filter(item => item.eligible !== false);
+  const near = results.filter(item => item.eligible === false);
   return `${pageHeader('REFINED RECOMMENDATIONS', 'See the trips worth your attention', 'A quieter review reranked from your current Classic preferences and saved Labs draft.')}
     ${packageCard()}
     ${uploadPanel()}
     ${postParseActions()}
-    ${!ready ? emptyFeature('Complete a Classic analysis first') : refinedRecommendationsLoading ? `<section class="surface labs-loading"><strong>Applying your saved trip preferences...</strong><p>Reranking the parsed package without uploading or parsing it again.</p></section>` : refinedRecommendationsError ? `<section class="surface labs-feature-empty"><h2>Recommendations could not be refreshed</h2><p>${escapeHtml(refinedRecommendationsError)}</p><a class="primary button" href="/labs/build">Review preferences</a></section>` : `<section class="surface labs-recommendations-panel"><div class="surface-title"><div><div><h2>Priority review</h2><p>${escapeHtml(results.length)} analyzed trips · showing the first ${Math.min(results.length, 8)}</p></div></div><a class="text-button button" href="/results">Open full Classic results</a></div><div class="labs-recommendation-list">${recommendationCards(results)}</div></section>`}
+    ${!ready ? emptyFeature('Complete a Classic analysis first') : refinedRecommendationsLoading ? `<section class="surface labs-loading"><strong>Applying your saved trip preferences...</strong><p>Reranking the parsed package without uploading or parsing it again.</p></section>` : refinedRecommendationsError ? `<section class="surface labs-feature-empty"><h2>Recommendations could not be refreshed</h2><p>${escapeHtml(refinedRecommendationsError)}</p><a class="primary button" href="/labs/build">Review preferences</a></section>` : `<section class="surface labs-recommendations-panel"><div class="surface-title"><div><div><h2>Exact and eligible matches</h2><p>${escapeHtml(eligible.length)} eligible trips · showing the first ${Math.min(eligible.length, 8)}</p></div></div><a class="text-button button" href="/results">Open full Classic results</a></div><div class="labs-recommendation-list">${eligible.length ? recommendationCards(eligible) : '<p class="muted">No trips met every hard requirement.</p>'}</div></section>${near.length ? `<section class="surface labs-recommendations-panel near-result-card"><div class="surface-title"><div><div><h2>Closest available</h2><p>${escapeHtml(near.length)} near matches · each misses at least one hard requirement</p></div></div></div><div class="labs-recommendation-list">${recommendationCards(near)}</div></section>` : ''}`}
     <div class="labs-page-actions"><a class="secondary button" href="/labs/build">Adjust bid priorities</a><a class="primary button" href="/labs/plan">Build proposed plan</a></div>`;
 }
 
@@ -242,8 +251,10 @@ function mergedLabsProfile() {
   const split = value => String(value || '').split(',').map(item => item.trim()).filter(Boolean);
   return {
     ...classic,
+    ...(draft.interpretedProfile || {}),
     required_days_off: draft.requiredDays ? split(draft.requiredDays) : (classic.required_days_off || []),
     preferred_trip_lengths: draft.tripLengths ? split(draft.tripLengths) : (classic.preferred_trip_lengths || []),
+    trip_length_priority: draft.tripLengths ? split(draft.tripLengths) : (classic.trip_length_priority || classic.preferred_trip_lengths || []),
     elite_cities: draft.layovers ? split(draft.layovers) : (classic.elite_cities || []),
     penalty_cities: draft.avoidLayovers ? split(draft.avoidLayovers) : (classic.penalty_cities || []),
     max_legs_per_day: draft.maxLegs || classic.max_legs_per_day,
@@ -412,6 +423,9 @@ function bindBuilder() {
       maxLegs: document.getElementById('labsMaxLegs').value,
       earliestReport: document.getElementById('labsEarliestReport').value,
       latestRelease: document.getElementById('labsLatestRelease').value,
+      intentText: document.getElementById('labsIntentText').value.trim(),
+      tripIntentResult: tripIntentResult || draft.tripIntentResult || null,
+      interpretedProfile: draft.interpretedProfile || {},
       notes: document.getElementById('labsNotes').value.trim(),
       savedAt: new Date().toISOString()
     };
@@ -425,6 +439,28 @@ function bindBuilder() {
   };
   button.addEventListener('click', () => saveCurrentDraft(true));
   document.getElementById('openLabsRecommendations')?.addEventListener('click', () => saveCurrentDraft(false));
+  document.getElementById('interpretLabsIntent')?.addEventListener('click', async () => {
+    const text = document.getElementById('labsIntentText').value.trim();
+    if (!text) return;
+    saveCurrentDraft(false); tripIntentLoading = true; tripIntentError = ''; render();
+    try {
+      const response = await fetch('/api/trip-intent', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify({ text }) });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.detail || 'Could not interpret that trip request');
+      tripIntentResult = body;
+      const current = readJson(draftKey, {}) || {};
+      localStorage.setItem(draftKey, JSON.stringify({ ...current, tripIntentResult: body }));
+    } catch (error) { tripIntentError = error.message || 'Could not interpret that trip request'; }
+    tripIntentLoading = false; render();
+  });
+  document.getElementById('applyLabsIntent')?.addEventListener('click', () => {
+    const parsed = (tripIntentResult || draft.tripIntentResult || {}).profile || {};
+    if (parsed.trip_length_priority) document.getElementById('labsTripLengths').value = parsed.trip_length_priority.join(', ');
+    if (parsed.secondary_cities) document.getElementById('labsLayovers').value = parsed.secondary_cities.join(', ');
+    if (parsed.max_legs_per_day || parsed.hard_max_legs_per_day) document.getElementById('labsMaxLegs').value = parsed.hard_max_legs_per_day || parsed.max_legs_per_day;
+    draft.interpretedProfile = parsed;
+    saveCurrentDraft(true);
+  });
 }
 
 async function loadRefinedRecommendations(jobId) {
