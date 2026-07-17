@@ -44,9 +44,10 @@ def _pay_rows(item: dict[str, Any], airline: str) -> list[list[Any]]:
         components = item.get("pay_components") or {}
         rows.extend([[label, components[label]] for label in ("EDP", "HOL", "SIT") if label in components])
         rows.append(["Total Pay", item.get("total_pay")])
+        unresolved = item.get("unresolved_pay_tokens") or []
         unknown = item.get("unknown_pay_components") or {}
-        if unknown:
-            rows.append(["Unmapped source pay", ", ".join(f"{label} {value}" for label, value in unknown.items())])
+        if unresolved or unknown:
+            rows.append(["Unmapped source pay", ", ".join(unresolved) or ", ".join(f"{label} {value}" for label, value in unknown.items())])
         return rows
     if airline == "american":
         return [["Total Pay", item.get("total_pay")]]
@@ -95,6 +96,8 @@ def build_bid_report(results: list[dict[str, Any]], profile: dict[str, Any], air
         fatigue = item.get("fatigue_index") or {}
         hold = item.get("hold_outlook") or {}
         row_values = _pay_rows(item, item_airline) + [["Trip length", f"{item.get('trip_length')} days" if item.get("trip_length") else "N/A"], ["TAFB", item.get("tafb")], ["Layovers", ", ".join(x.get("city", "") for x in item.get("layovers", [])) or "None"], ["Equipment", equipment], ["Legs by duty day", " • ".join(map(str, item.get("duty_legs", []))) or "—"], ["WOCL departures", wocl_legs], ["Fatigue Index", f"{fatigue.get('level')} ({fatigue.get('confidence')} confidence)" if fatigue else "Insufficient Data"], ["Fatigue factors", "; ".join(fatigue.get("contributing_factors", [])) or "None identified"], ["Fatigue mitigations", "; ".join(fatigue.get("mitigating_factors", [])) or "None identified"], ["Hold outlook", f"{hold.get('outlook')} ({hold.get('confidence')} confidence) — {hold.get('estimate_basis')}" if hold else "Insufficient data"], ["Operating dates", ", ".join(item.get("operating_dates", [])) or "Not available"], ["Matched preferences", "; ".join(item.get("matched_preferences", [])) or "; ".join(item.get("reasons", [])) or "No weighted signals"], ["Compromises", "; ".join(item.get("compromises", [])) or "None"], ["Requirements not met", "; ".join(item.get("eligibility_violations", [])) or "None"], ["Trip facts", "; ".join(item.get("neutral_attributes", [])) or "Not available"]]
+        if not item.get("operating_dates"):
+            row_values = [row for row in row_values if row[0] != "Operating dates"]
         rows = [[_cell(label, styles["Small"]), _cell(value, styles["Small"])] for label, value in row_values]
         table = Table(rows, colWidths=[1.35*inch, 5.05*inch])
         table.setStyle(TableStyle([("GRID", (0,0), (-1,-1), .25, colors.HexColor("#dbe4ef")), ("BACKGROUND", (0,0), (0,-1), colors.HexColor("#f3f6fa")), ("VALIGN", (0,0), (-1,-1), "TOP"), ("FONT", (0,0), (-1,-1), "Helvetica", 8), ("PADDING", (0,0), (-1,-1), 5)]))

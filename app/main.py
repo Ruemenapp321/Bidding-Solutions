@@ -1007,7 +1007,12 @@ def score_pairing(pairing: dict[str, Any], profile: dict[str, Any]) -> dict[str,
     airline = airline_for_pairing(pairing)
     touched_cities = detect_airports(block, pairing)
     cities = detect_layover_cities(pairing)
-    dates = list_field(pairing.get("effective")) if pairing.get("effective") else detect_dates(block)
+    if "operating_dates" in pairing:
+        dates = [str(value) for value in pairing.get("operating_dates") or []]
+    elif pairing.get("effective"):
+        dates = list_field(pairing.get("effective"))
+    else:
+        dates = [] if airline == "delta" else detect_dates(block)
     start_airport = detect_start_airport(pairing)
 
     elite = set(list_field(profile.get("elite_cities")))
@@ -1223,6 +1228,7 @@ def score_pairing(pairing: dict[str, Any], profile: dict[str, Any]) -> dict[str,
         "first_report": pairing.get("first_report") or pairing.get("checkin"),
         "final_release": pairing.get("final_release") or pairing.get("release"),
         "operating_dates": pairing.get("operating_dates") or dates,
+        "operating_dates_status": pairing.get("operating_dates_status") or ("validated" if dates else "unavailable"),
         "positions": pairing.get("positions", []),
         "fleet": pairing.get("fleet"),
         "satellite": pairing.get("satellite"),
@@ -1256,6 +1262,11 @@ def score_pairing(pairing: dict[str, Any], profile: dict[str, Any]) -> dict[str,
             "total_pay": pairing.get("total_pay"),
             "raw_total_pay": pairing.get("raw_total_pay"),
             "unknown_pay_components": pairing.get("unknown_pay_components"),
+            "edp": pairing.get("edp"),
+            "hol": pairing.get("hol"),
+            "sit": pairing.get("sit"),
+            "raw_pay_tokens": pairing.get("raw_pay_tokens", []),
+            "unresolved_pay_tokens": pairing.get("unresolved_pay_tokens", []),
             "credit_per_duty_day": pay_minutes_per_duty_day(pairing.get("trip_credit") or pairing.get("credit"), len(duty_counts)),
             "total_pay_per_duty_day": pay_minutes_per_duty_day(pairing.get("total_pay"), len(duty_counts)),
         })

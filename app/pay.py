@@ -9,7 +9,10 @@ DELTA_TOTAL_PAY = re.compile(
     r"TOTAL PAY\s+(?P<total>\d{1,3}[:.]\d{2})TL(?P<components>[^\n\r]*)",
     re.IGNORECASE,
 )
-DELTA_COMPONENT = re.compile(r"(?P<value>(?:\d{1,3})?\.\d{2})(?P<label>[A-Z]{2,8})", re.IGNORECASE)
+DELTA_PAY_TOKEN = re.compile(
+    r"(?<![A-Z0-9])(?P<raw>(?P<value>(?:\d{1,3})?[.:]\d{2}|\d{2,3})(?P<label>[A-Z]{2,8}))\b",
+    re.IGNORECASE,
+)
 DELTA_SUPPORTED_COMPONENTS = {"EDP", "HOL", "SIT"}
 
 
@@ -79,31 +82,46 @@ def southwest_pairing_pay_fields(pairing_tfp: Any, tafb: Any, duty_periods: int)
 
 
 def parse_delta_pay(block: str, trip_credit: Any) -> dict[str, Any]:
-    """Return only Delta-supported pay fields; absent components remain absent."""
+    """Parse Delta pay without treating unresolved tokens as zero."""
     match = DELTA_TOTAL_PAY.search(block or "")
     fields: dict[str, Any] = {
         "trip_credit": trip_credit,
         "raw_total_pay": match.group("total").replace(".", ":") if match else None,
+        "raw_pay_tokens": [],
+        "unresolved_pay_tokens": [],
     }
     if not match:
         return fields
 
     components: dict[str, str] = {}
     unknown: dict[str, str] = {}
-    for token in DELTA_COMPONENT.finditer(match.group("components")):
+    raw_tokens: list[str] = []
+    unresolved_tokens: list[str] = []
+    for token in DELTA_PAY_TOKEN.finditer(match.group("components")):
+        raw_token = token.group("raw").upper()
+        raw_tokens.append(raw_token)
         label = token.group("label").upper()
-        formatted = format_pay_minutes(parse_clock_minutes(token.group("value")))
+        value = token.group("value")
+        # A separator is required: 43EDP/02SIT are pay-shaped source tokens,
+        # but not confident clock values.
+        formatted = format_pay_minutes(parse_clock_minutes(value)) if re.search(r"[.:]", value) else None
         if formatted is None:
+            unresolved_tokens.append(raw_token)
             continue
         if label in DELTA_SUPPORTED_COMPONENTS:
             components[label] = formatted
         else:
             unknown[label] = formatted
+            unresolved_tokens.append(raw_token)
+
+    fields["raw_pay_tokens"] = raw_tokens
+    fields["unresolved_pay_tokens"] = unresolved_tokens
 
     if components:
         additional_minutes = sum(parse_clock_minutes(value) or 0 for value in components.values())
         credit_minutes = parse_clock_minutes(trip_credit)
         fields["pay_components"] = components
+        fields.update({label.lower(): value for label, value in components.items()})
         fields["additional_pay"] = format_pay_minutes(additional_minutes)
         fields["total_pay"] = format_pay_minutes(credit_minutes + additional_minutes) if credit_minutes is not None else None
     if unknown:

@@ -129,6 +129,51 @@ def test_delta_rotation_5354_preserves_its_own_column_and_pay_data():
     assert all("5-day" not in reason for reason in result["reasons"])
 
 
+def test_delta_operating_date_validator_rejects_pay_tokens_and_wrong_month():
+    context = (8, 2026)
+    assert delta.is_valid_operating_date_token("AUG25", context)
+    assert delta.is_valid_operating_date_token("25AUG2026", context)
+    assert delta.is_valid_operating_date_token("2026-08-25", context)
+    for token in ("CRD", "DHD", "MCD", "TRP", "DPA", "ADG", "EDP", "SIT", "HOL", "43EDP", "02SIT", "00HOL", "23DHD", "52TRP", "00CRD", "SEP25", "AUG32"):
+        assert not delta.is_valid_operating_date_token(token, context)
+
+
+def test_valid_delta_operating_dates_are_normalized_with_bid_month_context():
+    pairing = delta.parse("AUGUST 2026\n" + ROTATION_5354)[0]
+    assert pairing["operating_dates"] == ["2026-08-25"]
+    assert pairing["effective"] == "2026-08-25"
+    assert pairing["operating_dates_status"] == "validated"
+    result = score_pairing(pairing, {})
+    assert result["operating_dates"] == ["2026-08-25"]
+
+
+def test_pay_tokens_after_effective_column_never_become_operating_dates():
+    source = ("AUGUST 2026\n" + ROTATION_5354).replace(
+        "EFFECTIVE AUG25 ONLY                  CHECK-IN AT 14.15",
+        "EFFECTIVE\n43EDP 02SIT 00HOL 23DHD 52TRP 00CRD\nCHECK-IN AT 14.15",
+    )
+    pairing = delta.parse(source)[0]
+    result = score_pairing(pairing, {})
+    assert pairing["operating_dates"] == []
+    assert pairing["operating_dates_status"] == "unavailable"
+    assert result["operating_dates"] == []
+    assert result["operating_dates_status"] == "unavailable"
+    assert not ({"43EDP", "02SIT", "00HOL", "23DHD", "52TRP", "00CRD"} & set(result["operating_dates"]))
+
+
+def test_classic_labs_and_flight_deck_share_delta_normalized_pay_and_dates():
+    pairing = delta.parse("AUGUST 2026\n" + ROTATION_5354)[0]
+    result = score_pairing(pairing, {})
+    for field in ("operating_dates", "trip_credit", "edp", "hol", "sit", "additional_pay", "total_pay", "raw_pay_tokens", "unresolved_pay_tokens"):
+        assert field in result
+    root = Path(__file__).resolve().parents[1]
+    classic = (root / "app" / "static" / "app.js").read_text(encoding="utf-8")
+    labs = (root / "app" / "static" / "labs.js").read_text(encoding="utf-8")
+    assert "item.unresolved_pay_tokens" in classic
+    assert "if (!(item.operating_dates || item.dates || []).length)" in classic
+    assert "item.total_pay" in labs
+
+
 def test_delta_and_auto_pdf_extraction_preserve_native_column_order():
     assert sort_pdf_text_for_airline("delta") is False
     assert sort_pdf_text_for_airline("auto") is False
