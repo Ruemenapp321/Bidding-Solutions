@@ -172,6 +172,9 @@ def test_flight_deck_omits_disallowed_headline_content():
         "unsupported commute",
         "holding probability",
         "ai-powered",
+        "ai brief",
+        "ai summary",
+        "ai insights",
     ):
         assert disallowed not in combined
 
@@ -188,3 +191,88 @@ def test_flight_deck_mobile_layout_stacks_without_horizontal_scrolling():
     assert ".fd-card-actions{position:sticky" in styles
     assert "crewbidiqTheme" in script
     assert "document.documentElement.dataset.theme" in script
+
+
+def test_trip_briefing_has_airline_titles_and_all_required_sections():
+    script = (ROOT / "app" / "static" / "flight-deck.js").read_text(encoding="utf-8")
+    labs = (ROOT / "app" / "labs.py").read_text(encoding="utf-8")
+
+    for title in ("Rotation Briefing", "Sequence Briefing", "Pairing Briefing", "Line Briefing"):
+        assert title in script
+    for section in (
+        "Overview",
+        "Operational Highlights",
+        "Things to Know",
+        "Duty-Day Summary",
+        "Layovers and Hotels",
+        "Pay or TFP Breakdown",
+        "Fatigue",
+        "Likelihood of Holding",
+        "Commute Planner",
+        "Recommendation",
+        "Original Airline Trip",
+    ):
+        assert f"<h2>{section}</h2>" in script
+    assert "Exact match explanation" in script
+    assert 'src="/static/flight-deck.js?v=0002"' in labs
+
+
+def test_trip_briefing_reads_trip_facts_from_confirmed_canonical_models_only():
+    script = (ROOT / "app" / "static" / "flight-deck.js").read_text(encoding="utf-8")
+    briefing = script.split("function tripBriefingPage()", 1)[1].split("function noPackagePage()", 1)[0]
+
+    assert "function legacyTripBriefingPage" not in script
+    assert "canonicalTrips(item).filter" in script
+    assert "model.package_id === packageId" in script
+    assert "model.bidable_inventory_confirmed === true" in script
+    assert "const models = briefingModels(item)" in briefing
+    assert "const model = briefingPrimaryModel(item)" in briefing
+    assert "model?.trip_length_days" in briefing
+    assert "model?.duty_period_count" in briefing
+    assert "model?.tafb" in briefing
+    assert "model?.report" in briefing
+    assert "model?.release" in briefing
+    for legacy_fallback in (
+        "tripLegs(item)",
+        "tripLayovers(item)",
+        "tripTafb(item)",
+        "eventTime(item",
+        "airlinePayMetrics(item)",
+        "simplifiedRoute(item)",
+    ):
+        assert legacy_fallback not in briefing
+    assert "Array.isArray(model.duty_days)" in script
+    assert "Array.isArray(model.layovers)" in script
+    assert "model.pay_breakdown" in script
+    assert "model.tfp" in script
+
+
+def test_trip_briefing_preserves_source_provenance_and_safe_missing_states():
+    script = (ROOT / "app" / "static" / "flight-deck.js").read_text(encoding="utf-8")
+
+    assert "if (model.bidable_inventory_confirmed !== true) return ''" in script
+    for source_field in ("model.source_text", "model.source_page", "model.source_section"):
+        assert source_field in script
+    assert "Confirmed bidable inventory" in script
+    for missing_state in (
+        "Canonical trip details are unavailable",
+        "Duty-day details are unavailable",
+        "No canonical layovers are available",
+        "A normalized pay or TFP breakdown is unavailable",
+        "Confirmed bidable source provenance is unavailable",
+        "No Flight Deck fatigue assessment is available",
+        "No holding assessment is available",
+        "No commute plan is available",
+    ):
+        assert missing_state in script
+
+
+def test_trip_briefing_layout_is_responsive_on_desktop_and_mobile():
+    styles = (ROOT / "app" / "static" / "app.css").read_text(encoding="utf-8")
+
+    assert ".fd-briefing-layout{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))" in styles
+    assert ".fd-briefing-wide,.fd-briefing-overview{grid-column:1/-1}" in styles
+    assert ".fd-briefing-layout{grid-template-columns:1fr}" in styles
+    assert ".fd-briefing-wide,.fd-briefing-overview{grid-column:auto}" in styles
+    assert ".fd-fact-grid,.fd-source-meta{grid-template-columns:1fr 1fr}" in styles
+    assert ".fd-duty-day>header{grid-template-columns:1fr}" in styles
