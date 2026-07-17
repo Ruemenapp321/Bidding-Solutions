@@ -26,12 +26,14 @@ from fastapi.staticfiles import StaticFiles
 from app.airlines import airline_terminology_payload, get_airline_terminology
 from app.airports import coterminal_group_for_airport, coterminal_payload, expand_airports
 from app.destinations import taxonomy_payload
+from app.fatigue import build_fatigue_index
 from app.labs import labs_enabled, router as labs_router
 from app.navblue import build_navblue_layers
 from app.pay import pay_minutes_per_duty_day, pay_priority_value, tfp_per_day_away, tfp_ratio
 from app.parsers import select_parser
 from app.recommendations import evaluate_recommendation, length_priority, length_score_contribution
 from app.reporting import build_bid_report
+from app.seniority import build_seniority_context, estimate_hold_outlook
 from app.trip_intent import interpret_trip_intent, trip_intent_profile
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -520,6 +522,14 @@ def destinations() -> dict[str, Any]:
 def parse_trip_intent(payload: dict[str, Any]) -> dict[str, Any]:
     intent = interpret_trip_intent(str(payload.get("text") or ""))
     return {"intent": intent, "profile": trip_intent_profile(intent)}
+
+
+@app.post("/api/seniority-context")
+def seniority_context(payload: dict[str, Any]) -> dict[str, Any]:
+    context = build_seniority_context(payload)
+    if context is None:
+        raise HTTPException(400, "Enter a valid category position and category population.")
+    return context
 
 
 def extract_text(
@@ -1160,6 +1170,7 @@ def score_pairing(pairing: dict[str, Any], profile: dict[str, Any]) -> dict[str,
         "source_pdf_page": pairing.get("source_pdf_page"),
         "total_flight_segments": pairing.get("total_flight_segments", len(pairing.get("legs", []))),
         "aircraft_display_names": pairing.get("aircraft_display_names", []),
+        "duty_periods": pairing.get("duty_periods", []),
     }
     if airline == "southwest":
         result.update({
@@ -1206,6 +1217,9 @@ def score_pairing(pairing: dict[str, Any], profile: dict[str, Any]) -> dict[str,
     else:
         result["pay_explanation"] = None
     result.update(evaluate_recommendation(result, profile))
+    result["fatigue_index"] = build_fatigue_index(result)
+    result["seniority_context"] = build_seniority_context(profile.get("seniority_context"))
+    result["hold_outlook"] = estimate_hold_outlook(result, result["seniority_context"])
     if os.environ.get("RECOMMENDATION_DEBUG_ENABLED", "false").lower() == "true":
         result["recommendation_debug"] = {
             "parser": result.get("parser"),

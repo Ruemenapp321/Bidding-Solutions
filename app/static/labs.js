@@ -179,6 +179,15 @@ function builderPage() {
         <label>Earliest report<input id="labsEarliestReport" type="time" value="${escapeHtml(value('earliestReport'))}"></label>
         <label>Latest release<input id="labsLatestRelease" type="time" value="${escapeHtml(value('latestRelease'))}"></label>
       </div>
+      <details class="advanced"><summary>Seniority and category context (optional)</summary><div class="labs-form-grid">
+        <label>Global seniority<input id="labsGlobalSeniority" type="number" min="1" value="${escapeHtml(value('globalSeniority'))}"></label>
+        <label>Category position<input id="labsCategorySeniority" type="number" min="1" value="${escapeHtml(value('categorySeniority'))}" placeholder="620"></label>
+        <label>Category population<input id="labsCategoryPopulation" type="number" min="1" value="${escapeHtml(value('categoryPopulation'))}" placeholder="1000"></label>
+        <label>Base<input id="labsSeniorityBase" value="${escapeHtml(value('seniorityBase'))}" placeholder="ATL"></label>
+        <label>Fleet<input id="labsSeniorityFleet" value="${escapeHtml(value('seniorityFleet'))}" placeholder="320"></label>
+        <label>Seat<input id="labsSenioritySeat" value="${escapeHtml(value('senioritySeat'))}" placeholder="FO"></label>
+        <label>Bid month<input id="labsBidMonth" value="${escapeHtml(value('bidMonth'))}" placeholder="August 2026"></label>
+      </div></details>
       <label class="labs-notes">What would make this a successful month?<textarea id="labsNotes" placeholder="Example: Protect my daughter's birthday and favor longer Hawaii layovers.">${escapeHtml(value('notes'))}</textarea></label>
       <div class="labs-builder-actions"><button id="saveLabsDraft" class="secondary">Save draft</button><a id="openLabsRecommendations" class="primary button" href="/labs/recommendations">Refine recommendations</a></div>
     </section>
@@ -201,7 +210,7 @@ function recommendationCards(results) {
     return `<article class="labs-recommendation">
       <div class="labs-rank">${index + 1}</div>
       <div><span>${escapeHtml(item.display_label || 'Trip')} ${escapeHtml(item.pairing)}</span><h3>${escapeHtml(layovers)}</h3><p>${reasons.length ? reasons.map(escapeHtml).join(' · ') : 'No strong preference signals were detected.'}</p></div>
-      <div class="labs-recommendation-metrics"><strong>${escapeHtml(matchLabel(item))}</strong><span>${escapeHtml(pay.value || 'N/A')} ${escapeHtml(pay.label)}</span></div>
+      <div class="labs-recommendation-metrics"><strong>${escapeHtml(matchLabel(item))}</strong><span>${escapeHtml(pay.value || 'N/A')} ${escapeHtml(pay.label)}</span>${item.hold_outlook ? `<span>${escapeHtml(item.hold_outlook.outlook)} hold outlook</span>` : ''}</div>
     </article>`;
   }).join('');
 }
@@ -249,6 +258,16 @@ function mergedLabsProfile() {
   const classic = readJson('crewbidiqProfile', {}) || {};
   const draft = readJson(draftKey, {}) || {};
   const split = value => String(value || '').split(',').map(item => item.trim()).filter(Boolean);
+  const clockMinutes = value => { if (!value) return null; const [hours, minutes] = String(value).split(':').map(Number); return hours * 60 + minutes; };
+  const seniorityContext = draft.categorySeniority && draft.categoryPopulation ? {
+    global_seniority: draft.globalSeniority || null,
+    category_seniority: draft.categorySeniority,
+    category_population: draft.categoryPopulation,
+    base: draft.seniorityBase || null,
+    fleet: draft.seniorityFleet || null,
+    seat: draft.senioritySeat || null,
+    bid_month: draft.bidMonth || null
+  } : (classic.seniority_context || null);
   return {
     ...classic,
     ...(draft.interpretedProfile || {}),
@@ -258,8 +277,9 @@ function mergedLabsProfile() {
     elite_cities: draft.layovers ? split(draft.layovers) : (classic.elite_cities || []),
     penalty_cities: draft.avoidLayovers ? split(draft.avoidLayovers) : (classic.penalty_cities || []),
     max_legs_per_day: draft.maxLegs || classic.max_legs_per_day,
-    earliest_report: draft.earliestReport || null,
-    latest_release: draft.latestRelease || null
+    earliest_report_minutes: draft.earliestReport ? clockMinutes(draft.earliestReport) : (classic.earliest_report_minutes ?? null),
+    latest_release_minutes: draft.latestRelease ? clockMinutes(draft.latestRelease) : (classic.latest_release_minutes ?? null),
+    seniority_context: seniorityContext
   };
 }
 
@@ -423,6 +443,13 @@ function bindBuilder() {
       maxLegs: document.getElementById('labsMaxLegs').value,
       earliestReport: document.getElementById('labsEarliestReport').value,
       latestRelease: document.getElementById('labsLatestRelease').value,
+      globalSeniority: document.getElementById('labsGlobalSeniority').value,
+      categorySeniority: document.getElementById('labsCategorySeniority').value,
+      categoryPopulation: document.getElementById('labsCategoryPopulation').value,
+      seniorityBase: document.getElementById('labsSeniorityBase').value.trim().toUpperCase(),
+      seniorityFleet: document.getElementById('labsSeniorityFleet').value.trim().toUpperCase(),
+      senioritySeat: document.getElementById('labsSenioritySeat').value.trim().toUpperCase(),
+      bidMonth: document.getElementById('labsBidMonth').value.trim(),
       intentText: document.getElementById('labsIntentText').value.trim(),
       tripIntentResult: tripIntentResult || draft.tripIntentResult || null,
       interpretedProfile: draft.interpretedProfile || {},
