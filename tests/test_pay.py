@@ -18,12 +18,28 @@ def test_delta_total_pay_is_credit_plus_supported_components():
     assert pay["total_pay"] == "22:32"
     assert pay["raw_total_pay"] == "22:32"
     assert pay["unknown_pay_components"] == {"CARVE": "0:00"}
+    assert pay["sit"] == "0:11"
+    assert pay["edp"] == "0:57"
+    assert pay["hol"] == "0:00"
+    assert pay["raw_pay_tokens"] == [".11SIT", ".57EDP", ".00HOL", ".00CARVE"]
+    assert pay["unresolved_pay_tokens"] == [".00CARVE"]
 
 
 def test_unknown_delta_component_is_preserved_and_not_added():
     pay = parse_delta_pay("TOTAL PAY 10:45TL .15EDP .30XYZ", "10.00")
     assert pay["total_pay"] == "10:15"
     assert pay["unknown_pay_components"] == {"XYZ": "0:30"}
+    assert pay["unresolved_pay_tokens"] == [".30XYZ"]
+
+
+def test_malformed_supported_pay_token_is_unresolved_not_zero_or_totaled():
+    pay = parse_delta_pay("TOTAL PAY 99:59TL .15EDP 43SIT 00HOL", "10.00")
+    assert pay["edp"] == "0:15"
+    assert "sit" not in pay and "hol" not in pay
+    assert pay["unresolved_pay_tokens"] == ["43SIT", "00HOL"]
+    assert pay["additional_pay"] == "0:15"
+    assert pay["total_pay"] == "10:15"
+    assert pay["raw_total_pay"] == "99:59"
 
 
 def test_missing_delta_components_are_not_silently_zero():
@@ -69,8 +85,10 @@ def test_non_delta_airline_never_receives_delta_pay_components():
 def test_hard_day_off_conflict_stays_below_pay_optimized_result():
     high = delta.parse(DELTA_SAMPLE)[0]
     high["effective"] = "2026-08-11"
+    high["operating_dates"] = ["2026-08-11"]
     low = delta.parse(DELTA_SAMPLE.replace("#4492", "#4493").replace("22:32", "21:32").replace(".57EDP", ".00EDP"))[0]
     low["effective"] = "2026-08-12"
+    low["operating_dates"] = ["2026-08-12"]
     profile = {"pay_priority": "total_pay", "required_days_off": ["8/11"], "prefer_operate": False}
     results = [score_pairing(high, profile), score_pairing(low, profile)]
     sort_results(results)
