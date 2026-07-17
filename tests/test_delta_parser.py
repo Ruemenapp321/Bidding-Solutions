@@ -1,7 +1,7 @@
 from pathlib import Path
 import fitz
 from app.parsers import delta
-from app.main import score_pairing, sort_pdf_text_for_airline
+from app.main import build_bid_synopsis, consolidate_pairings, filter_pairings_for_profile, score_pairing, sort_pdf_text_for_airline
 
 
 ROTATION_5354 = """#5354  TU              EFFECTIVE AUG25 ONLY                  CHECK-IN AT 14.15
@@ -39,6 +39,71 @@ ROTATION_4497 = """#4497  TH              EFFECTIVE AUG27 ONLY                  
   TOTAL CREDIT 21.20TL  20.03BL    1.17CR   29.25FDP                TAFB  74.40
   TOTAL PAY    21:20TL    .00SIT    .00EDP    .00HOL    .00CARVE
 """
+
+R523 = """#R523  MO              EFFECTIVE AUG01 ONLY                  CHECK-IN AT 08.00
+ DAY   FLIGHT T  DEPARTS   ARRIVES C BLK.  TURN BLK/MAX FDP/MAX PWA FDP/MAX
+  A      200    ATL 1000  JNB 2200  9.00   .55 350 M                         2
+  B      201    JNB 2300  ATL 1100  9.00       350   10.00/12.00 10.00/11.30 2
+  TOTAL CREDIT 18.00TL  18.00BL    .00CR   20.00FDP                TAFB  28.00
+"""
+
+
+def test_instructional_r523_is_rejected_but_atl_a350_inventory_occurrence_is_accepted(monkeypatch):
+    monkeypatch.setenv("PARSER_DEBUG_ENABLED", "true")
+    instructional_package = f"""<<<CREWBIDIQ_PAGE:1>>>
+DTW A320 BID PACKAGE
+350 FOUR PILOT OPERATIONS & FRMS
+Below is an example published in the 350 bid package for reference.
+{R523}
+"""
+    assert delta.parse(instructional_package) == []
+    rejected_diagnostic = delta.get_diagnostics()[0]
+
+    atl_package = f"""<<<CREWBIDIQ_PAGE:1>>>
+ATL A350 BID PACKAGE
+MASTER PAIRINGS
+{R523}
+"""
+    parsed = delta.parse(atl_package)
+    accepted = parsed[0]
+    assert accepted["package_base"] == "ATL"
+    assert accepted["package_fleet"] == "A350"
+    assert accepted["bidable_inventory_confirmed"] is True
+    assert accepted["page_classification"] == "BIDABLE_INVENTORY"
+    assert accepted["source_page"] == 1
+    assert accepted["inventory_key"] == f'{accepted["package_id"]}:R523'
+
+    assert rejected_diagnostic == {
+        "candidate_rotation": "R523", "source_page": 1,
+        "source_heading": "DTW A320 BID PACKAGE", "page_classification": "EXAMPLE",
+        "result": "REJECTED", "rejection_reason": "instructional_example_outside_bidable_inventory",
+        "confidence": rejected_diagnostic["confidence"],
+    }
+    assert delta.get_diagnostics()[0]["result"] == "ACCEPTED"
+
+
+def test_rotation_shaped_example_outside_inventory_is_rejected():
+    assert delta.parse(f"ATL A350 TRAINING EXAMPLE\nnot for bidding\n{R523}") == []
+
+
+def test_package_scoped_rotation_ids_do_not_suppress_another_package():
+    first = {"id": "R523", "package_id": "dtw-a320", "bidable_inventory_confirmed": False, "legs": []}
+    second = {"id": "R523", "package_id": "atl-a350", "bidable_inventory_confirmed": True, "legs": [{"departure": "ATL"}]}
+    consolidated = consolidate_pairings([first, second])
+    assert len(consolidated) == 2
+    assert filter_pairings_for_profile(consolidated, {}) == [consolidated[1]]
+
+
+def test_all_shared_inventory_consumers_only_receive_confirmed_records():
+    valid = delta.parse(ROTATION_5354)[0]
+    rejected = {**valid, "id": "R523", "rotation_number": "R523", "inventory_key": f'{valid["package_id"]}:R523', "bidable_inventory_confirmed": False}
+    accepted = filter_pairings_for_profile([valid, rejected], {})
+    assert [row["id"] for row in accepted] == ["5354"]
+    # Classic, Labs, Flight Deck/PBS and exports are all generated from this scored result list.
+    results = [score_pairing(row, {}) for row in accepted]
+    assert all(result["bidable_inventory_confirmed"] for result in results)
+    assert all("JNB" not in result["cities"] for result in results)
+    assert build_bid_synopsis([valid, rejected])["total"] == 1
 
 
 def test_delta_rotation_5354_preserves_its_own_column_and_pay_data():

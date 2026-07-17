@@ -593,21 +593,33 @@ def pairing_record_quality(pairing: dict[str, Any]) -> tuple[int, int, int, int,
 
 
 def consolidate_pairings(pairings: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Keep one unique trip per repeated ID while retaining every operating date."""
+    """Keep one package-scoped trip per repeated ID and retain operating dates."""
     order: list[str] = []
     candidates: dict[str, list[dict[str, Any]]] = {}
     for pairing in pairings:
         pairing_id = str(pairing.get("id") or "").strip().upper()
         if not pairing_id:
             continue
-        if pairing_id not in candidates:
-            order.append(pairing_id)
-            candidates[pairing_id] = []
-        candidates[pairing_id].append(pairing)
+        package_id = str(pairing.get("package_id") or "legacy-package").strip()
+        inventory_key = str(pairing.get("inventory_key") or f"{package_id}:{pairing_id}")
+        pairing.setdefault("package_id", package_id)
+        pairing.setdefault("rotation_number", pairing_id)
+        pairing.setdefault("inventory_key", inventory_key)
+        pairing.setdefault("source_page", pairing.get("source_pdf_page"))
+        pairing.setdefault("source_section", pairing.get("fleet_section") or "bidable_inventory")
+        pairing.setdefault("page_classification", "BIDABLE_INVENTORY")
+        pairing.setdefault("package_base", pairing.get("base"))
+        pairing.setdefault("package_fleet", pairing.get("fleet"))
+        pairing.setdefault("parser_confidence", pairing.get("confidence", 0.0))
+        pairing.setdefault("bidable_inventory_confirmed", True)
+        if inventory_key not in candidates:
+            order.append(inventory_key)
+            candidates[inventory_key] = []
+        candidates[inventory_key].append(pairing)
 
     consolidated: list[dict[str, Any]] = []
-    for pairing_id in order:
-        records = candidates[pairing_id]
+    for inventory_key in order:
+        records = candidates[inventory_key]
         selected = dict(max(records, key=pairing_record_quality))
         operating_dates: list[str] = []
         for record in records:
@@ -874,6 +886,11 @@ def pairing_trip_length(pairing: dict[str, Any]) -> int:
 
 
 def filter_pairings_for_profile(pairings: list[dict[str, Any]], profile: dict[str, Any]) -> list[dict[str, Any]]:
+    # Records from pre-provenance caches are normalized once at this boundary;
+    # explicit unconfirmed candidates can never enter recommendation input.
+    for pairing in pairings:
+        pairing.setdefault("bidable_inventory_confirmed", True)
+    pairings = [pairing for pairing in pairings if pairing.get("bidable_inventory_confirmed") is True]
     fleets = set(list_field(profile.get("bid_fleets")))
     if not fleets:
         return pairings
@@ -888,7 +905,7 @@ def _breakdown(counter: Counter[str], total: int, label: str) -> list[dict[str, 
 
 
 def build_bid_synopsis(pairings: list[dict[str, Any]]) -> dict[str, Any]:
-    pairings = consolidate_pairings(pairings)
+    pairings = filter_pairings_for_profile(consolidate_pairings(pairings), {})
     total = len(pairings)
     complete = sum(bool(pairing.get("legs")) for pairing in pairings)
     redeyes = sum(classify_redeye(pairing) != "none" for pairing in pairings)
@@ -1132,7 +1149,16 @@ def score_pairing(pairing: dict[str, Any], profile: dict[str, Any]) -> dict[str,
         "calendar_conflicts": calendar_conflicts,
         "reasons": reasons,
         "parser": pairing.get("parser", "generic"),
-        "parser_confidence": pairing.get("confidence", 0),
+        "parser_confidence": pairing.get("parser_confidence", pairing.get("confidence", 0)),
+        "package_id": pairing.get("package_id"),
+        "inventory_key": pairing.get("inventory_key"),
+        "source_page": pairing.get("source_page") or pairing.get("source_pdf_page"),
+        "source_section": pairing.get("source_section"),
+        "page_classification": pairing.get("page_classification"),
+        "package_base": pairing.get("package_base"),
+        "package_fleet": pairing.get("package_fleet"),
+        "rotation_number": pairing.get("rotation_number") or pairing.get("id"),
+        "bidable_inventory_confirmed": pairing.get("bidable_inventory_confirmed") is True,
         "data_quality": "incomplete" if data_issues else "complete",
         "data_issues": data_issues,
         "credit": pairing.get("credit"),
