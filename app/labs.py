@@ -70,8 +70,8 @@ LABS_HTML = r"""
     </nav>
   </div>
 </div>
-<script>window.CREWBIDIQ_LABS_PAGE = "__LABS_PAGE__";window.CREWBIDIQ_FLIGHT_DECK_PREVIEW_ENABLED = __FLIGHT_DECK_ENABLED__;</script>
-<script src="/static/labs.js?v=0425"></script>
+<script>window.CREWBIDIQ_LABS_PAGE = "__LABS_PAGE__";window.CREWBIDIQ_FLIGHT_DECK_PREVIEW_ENABLED = __FLIGHT_DECK_ENABLED__;window.CREWBIDIQ_ANALYSIS_DEBUG_ENABLED=__ANALYSIS_DEBUG_ENABLED__;</script>
+<script src="/static/labs.js?v=0426"></script>
 </body>
 </html>
 """
@@ -95,6 +95,7 @@ def labs_page(page: str) -> HTMLResponse:
         .replace("__SOUTHWEST_LINK__", southwest_link)
         .replace("__FLIGHT_DECK_LINK__", flight_deck_link)
         .replace("__FLIGHT_DECK_ENABLED__", "true" if flight_deck_preview_enabled() else "false")
+        .replace("__ANALYSIS_DEBUG_ENABLED__", "true" if os.environ.get("ANALYSIS_DEBUG_ENABLED", "false").lower() == "true" else "false")
     )
 
 
