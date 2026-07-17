@@ -55,3 +55,11 @@ def test_ordered_trip_length_priority_controls_eligible_sorting():
     ]
     sort_results(results)
     assert [item["pairing"] for item in results] == ["FIVE", "THREE"]
+
+
+def test_strongly_avoided_destination_is_a_hard_violation():
+    evaluated = evaluate_recommendation(result(city="HNL"), {
+        "destination_preferences": [{"value": "HAWAII", "strength": "Strongly avoid"}]
+    })
+    assert evaluated["eligible"] is False
+    assert evaluated["eligibility_violations"] == ["Includes strongly avoided destination HAWAII"]

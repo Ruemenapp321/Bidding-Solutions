@@ -23,3 +23,11 @@ def test_long_layover_assumption_is_explicit_not_silent():
     assert intent["min_layover_hours"] == 16
     assert intent["assumptions"]
     assert intent["destination_groups"][0]["value"] == "HAWAII"
+
+
+def test_total_leg_limit_and_commute_context_survive_profile_conversion():
+    intent = interpret_trip_intent("Commute friendly, no more than 6 legs total, long haul.")
+    profile = trip_intent_profile(intent)
+    assert profile["hard_max_total_legs"] == 6
+    assert profile["long_haul"] is True
+    assert profile["commute_preference"] == "commute_friendly"

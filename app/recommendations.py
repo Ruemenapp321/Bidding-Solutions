@@ -122,6 +122,31 @@ def evaluate_recommendation(result: dict[str, Any], profile: dict[str, Any]) -> 
     hard_max_deadheads = profile.get("hard_max_deadheads")
     if hard_max_deadheads not in (None, "") and int(result.get("deadheads") or 0) > int(hard_max_deadheads):
         violations.append(f"Has {result.get('deadheads')} deadheads; hard maximum is {hard_max_deadheads}")
+    hard_max_total = profile.get("hard_max_total_legs")
+    if hard_max_total not in (None, "") and sum(duty_legs) > int(hard_max_total):
+        violations.append(f"Has {sum(duty_legs)} operating legs; hard trip maximum is {hard_max_total}")
+
+    if profile.get("transcontinental"):
+        (matched if result.get("transcontinental") else compromises).append(
+            "Includes transcontinental flying" if result.get("transcontinental") else "Does not include a transcontinental leg"
+        )
+    if profile.get("long_haul"):
+        (matched if result.get("long_haul") else compromises).append(
+            "Includes long-haul flying" if result.get("long_haul") else "Does not include a parsed long-haul leg"
+        )
+
+    for entry in profile.get("destination_preferences") or []:
+        value = str(entry.get("value") or "").upper()
+        strength = str(entry.get("strength") or "neutral").lower().replace(" ", "_")
+        hit = destination_matches(cities, value)
+        if strength in {"favorite", "preferred"}:
+            (matched if hit else compromises).append(f"Includes {value}" if hit else f"Does not include preferred {value}")
+        elif strength == "avoid" and hit:
+            compromises.append(f"Includes avoided destination {value}")
+        elif strength == "strongly_avoid" and hit:
+            violations.append(f"Includes strongly avoided destination {value}")
+        elif strength == "neutral" and hit:
+            neutral.append(f"Includes neutral destination {value}")
 
     priority = length_priority(profile)
     rank = matching_length_rank(trip_length, priority)

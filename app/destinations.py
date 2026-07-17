@@ -30,6 +30,9 @@ ALIASES = {
     "TRANSCONTINENTAL": "TRANSCON", "TRANSCON": "TRANSCON",
 }
 
+EAST_COAST = {"BOS", "EWR", "IAD", "JFK", "LGA", "MIA", "PHL", "DCA", "BWI"}
+WEST_COAST = {"LAX", "OAK", "PDX", "SAN", "SEA", "SFO", "SJC"}
+
 
 def resolve_destination(value: str) -> dict[str, object]:
     token = str(value or "").strip().upper()
@@ -45,6 +48,15 @@ def destination_matches(values: Iterable[str], preference: str) -> bool:
     airports = {str(value or "").strip().upper() for value in values}
     resolved = resolve_destination(preference)
     return bool(airports.intersection(resolved["airports"]))
+
+
+def is_transcontinental(legs: Iterable[dict[str, object]]) -> bool:
+    for leg in legs:
+        departure = str(leg.get("departure") or "").upper()
+        arrival = str(leg.get("arrival") or "").upper()
+        if (departure in EAST_COAST and arrival in WEST_COAST) or (departure in WEST_COAST and arrival in EAST_COAST):
+            return True
+    return False
 
 
 def taxonomy_payload() -> list[dict[str, object]]:

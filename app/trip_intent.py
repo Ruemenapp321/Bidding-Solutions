@@ -49,6 +49,10 @@ def interpret_trip_intent(text: str) -> dict[str, Any]:
     if max_legs:
         intent["hard_max_legs_per_day"] = 2
         intent["matched_phrases"].append("hard maximum two legs per duty day")
+    total_legs = re.search(r"(?:maximum|max|no more than)\s+(\d+)\s+(?:operating\s+)?legs?\s+(?:total|for the trip)", lower)
+    if total_legs:
+        intent["hard_max_total_legs"] = int(total_legs.group(1))
+        intent["matched_phrases"].append(f"hard maximum {total_legs.group(1)} operating legs for the trip")
 
     if "transcon" in lower or "transcontinental" in lower:
         intent["transcontinental"] = True
@@ -111,11 +115,12 @@ def trip_intent_profile(intent: dict[str, Any]) -> dict[str, Any]:
     allowed = {
         "required_trip_lengths", "trip_length_priority", "max_legs_per_day", "hard_max_legs_per_day",
         "max_first_day_legs", "max_last_day_legs", "earliest_report_minutes", "latest_release_minutes",
-        "must_avoid_redeye", "min_layover_hours", "hard_max_deadheads", "pay_priority",
+        "must_avoid_redeye", "min_layover_hours", "hard_max_deadheads", "hard_max_total_legs", "pay_priority",
+        "transcontinental", "long_haul", "one_and_done", "commute_preference",
     }
     profile = {key: value for key, value in intent.items() if key in allowed and value not in (None, "", [], {})}
     destination_groups = [item["value"] for item in intent.get("destination_groups", []) if item.get("strength") == "must_have"]
-    preferred_groups = [item["value"] for item in intent.get("destination_groups", []) if item.get("strength") in {"favorite", "preferred"}]
+    preferred_groups = [item["value"] for item in intent.get("destination_groups", []) if item.get("strength") in {"favorite", "preferred"} and item.get("value") != "TRANSCON"]
     if destination_groups:
         profile["required_destination_groups"] = destination_groups
     if preferred_groups:

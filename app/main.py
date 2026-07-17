@@ -25,7 +25,7 @@ from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from app.airlines import airline_terminology_payload, get_airline_terminology
 from app.airports import coterminal_group_for_airport, coterminal_payload, expand_airports
-from app.destinations import taxonomy_payload
+from app.destinations import is_transcontinental, taxonomy_payload
 from app.fatigue import build_fatigue_index
 from app.labs import labs_enabled, router as labs_router
 from app.month_planner import build_month_plan
@@ -1173,6 +1173,12 @@ def score_pairing(pairing: dict[str, Any], profile: dict[str, Any]) -> dict[str,
         "total_flight_segments": pairing.get("total_flight_segments", len(pairing.get("legs", []))),
         "aircraft_display_names": pairing.get("aircraft_display_names", []),
         "duty_periods": pairing.get("duty_periods", []),
+        "transcontinental": is_transcontinental(result_legs),
+        "long_haul": any(
+            (float(str(leg.get("block") or "0").replace(":", ".")) >= 6.0)
+            for leg in result_legs
+            if re.fullmatch(r"\d{1,2}[.:]\d{2}", str(leg.get("block") or ""))
+        ),
     }
     if airline == "southwest":
         result.update({
