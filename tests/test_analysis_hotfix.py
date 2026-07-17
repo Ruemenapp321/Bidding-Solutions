@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
@@ -142,3 +143,165 @@ def test_reset_endpoint_clears_package_and_jobs():
     with main.db() as conn:
         assert conn.execute("SELECT COUNT(*) FROM jobs WHERE package_id=?", (package_id,)).fetchone()[0] == 0
         assert conn.execute("SELECT COUNT(*) FROM packages WHERE id=?", (package_id,)).fetchone()[0] == 0
+
+
+def _sample_pairing(pairing_id: str) -> dict:
+    return {
+        "id": pairing_id,
+        "block": f"#{pairing_id}\nATL 0800 BOS 1000",
+        "legs": [
+            {
+                "day": "A",
+                "deadhead": False,
+                "departure": "ATL",
+                "departure_time": "0800",
+                "arrival": "BOS",
+                "arrival_time": "1000",
+                "aircraft": "320",
+            },
+            {
+                "day": "B",
+                "deadhead": False,
+                "departure": "BOS",
+                "departure_time": "0800",
+                "arrival": "ATL",
+                "arrival_time": "1000",
+                "aircraft": "320",
+            },
+        ],
+        "layovers": [{"city": "BOS", "duration": "16:00", "hotel": None}],
+        "credit": "10:00",
+        "tafb": "26:00",
+        "parser": "delta_test",
+        "confidence": 1.0,
+    }
+
+
+def _insert_processing_job(job_id: str, upload_path: Path, *, package_id: str) -> None:
+    with main.db() as conn:
+        conn.execute("DELETE FROM jobs WHERE id=?", (job_id,))
+        conn.execute(
+            """INSERT INTO jobs(id,filename,status,progress,message,airline,profile_json,uploads_json,package_id,state,current_stage,recoverable,created_at,updated_at)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'),datetime('now'))""",
+            (
+                job_id,
+                upload_path.name,
+                "processing",
+                5,
+                "Detecting airline and package type",
+                "delta",
+                "{}",
+                json.dumps([str(upload_path)]),
+                package_id,
+                "parsing",
+                "detecting_package",
+                1,
+            ),
+        )
+
+
+def _prepare_cached_delta_job(job_id: str, tmp_path: Path, *, pairings: list[dict], package_id: str) -> tuple[Path, str]:
+    upload_path = tmp_path / f"{job_id}.pdf"
+    upload_path.write_bytes(b"%PDF-1.4\ncached")
+    cache_key = main.parser_cache_key(upload_path, "delta")
+    main.store_cached_pairings(cache_key, "delta", "delta_v1", pairings)
+    _insert_processing_job(job_id, upload_path, package_id=package_id)
+    return upload_path, cache_key
+
+
+def test_cancel_during_active_parsing_stops_before_parser_execution(monkeypatch, tmp_path):
+    job_id = "hotfix-cancel-during-parse"
+    package_id = "hotfix-cancel-during-parse-package"
+    upload_path = tmp_path / "parse-target.pdf"
+    upload_path.write_bytes(b"%PDF-1.4\nparse")
+    _insert_processing_job(job_id, upload_path, package_id=package_id)
+
+    def cancel_while_extracting(*_args, **_kwargs):
+        main.update_job(
+            job_id,
+            status="failed",
+            state="cancelled",
+            current_stage="cancelled",
+            recoverable=0,
+            message="Analysis cancelled",
+            user_message="Analysis cancelled",
+        )
+        return "MASTER PAIRINGS\n#1001"
+
+    monkeypatch.setattr(main, "extract_text", cancel_while_extracting)
+    monkeypatch.setattr(
+        main,
+        "parse_pairings",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("cancelled parsing must not reach parse_pairings")),
+    )
+
+    main.process_job(job_id, [upload_path], {}, "delta")
+    row = main.get_job(job_id)
+
+    assert row["state"] == "cancelled"
+    assert row["status"] == "failed"
+    assert row["current_stage"] == "cancelled"
+    assert row["results_json"] is None
+
+
+def test_cancel_during_active_scoring_stops_before_publish(monkeypatch, tmp_path):
+    job_id = "hotfix-cancel-during-scoring"
+    package_id = "hotfix-cancel-during-scoring-package"
+    pairings = [_sample_pairing("1001"), _sample_pairing("1002"), _sample_pairing("1003")]
+    upload_path, cache_key = _prepare_cached_delta_job(job_id, tmp_path, pairings=pairings, package_id=package_id)
+    original_score_pairing = main.score_pairing
+    cancelled = {"value": False}
+
+    def score_and_cancel(pairing, profile):
+        if not cancelled["value"]:
+            cancelled["value"] = True
+            main.update_job(
+                job_id,
+                status="failed",
+                state="cancelled",
+                current_stage="cancelled",
+                recoverable=0,
+                message="Analysis cancelled",
+                user_message="Analysis cancelled",
+            )
+        return original_score_pairing(pairing, profile)
+
+    monkeypatch.setattr(main, "score_pairing", score_and_cancel)
+
+    try:
+        main.process_job(job_id, [upload_path], {}, "delta")
+        row = main.get_job(job_id)
+        assert row["state"] == "cancelled"
+        assert row["status"] == "failed"
+        assert row["current_stage"] == "cancelled"
+    finally:
+        with main.db() as conn:
+            conn.execute("DELETE FROM parse_cache WHERE cache_key=?", (cache_key,))
+
+
+def test_one_malformed_trip_does_not_block_remaining_results(monkeypatch, tmp_path):
+    job_id = "hotfix-malformed-trip"
+    package_id = "hotfix-malformed-trip-package"
+    pairings = [_sample_pairing("1001"), _sample_pairing("1002"), _sample_pairing("1003")]
+    upload_path, cache_key = _prepare_cached_delta_job(job_id, tmp_path, pairings=pairings, package_id=package_id)
+    original_score_pairing = main.score_pairing
+
+    def score_with_one_malformed(pairing, profile):
+        if str(pairing.get("id")) == "1002":
+            raise RuntimeError("Malformed record")
+        return original_score_pairing(pairing, profile)
+
+    monkeypatch.setattr(main, "score_pairing", score_with_one_malformed)
+
+    try:
+        main.process_job(job_id, [upload_path], {}, "delta")
+        row = main.get_job(job_id)
+        results = json.loads(row["results_json"] or "[]")
+        assert row["status"] == "complete"
+        assert row["state"] == "completed"
+        assert int(row["records_failed"] or 0) == 1
+        assert len(results) == 2
+        assert all(result.get("pairing") != "1002" for result in results)
+    finally:
+        with main.db() as conn:
+            conn.execute("DELETE FROM parse_cache WHERE cache_key=?", (cache_key,))

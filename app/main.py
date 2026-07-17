@@ -337,7 +337,11 @@ def startup() -> None:
     init_db()
     cleanup_expired_packages()
     with db() as conn:
-        pending = conn.execute("SELECT * FROM jobs WHERE status IN ('queued','processing')").fetchall()
+        pending = conn.execute(
+            """SELECT * FROM jobs
+               WHERE status IN ('queued','processing')
+                 AND COALESCE(state, '') NOT IN ('cancelled', 'expired')"""
+        ).fetchall()
     for row in pending:
         paths = [Path(p) for p in json.loads(row["uploads_json"] or "[]")]
         if paths and all(path.exists() for path in paths) and row["airline"]:
@@ -2138,6 +2142,7 @@ def process_job(job_id: str, paths: list[Path], profile: dict[str, Any], airline
         )
         check_cancelled(job_id)
         sort_results(results, package_id)
+        summary_started = time.perf_counter()
         summaries: list[dict[str, Any]] = []
         total_results = len(results)
         summary_batches = max((total_results + SCORING_BATCH_SIZE - 1) // SCORING_BATCH_SIZE, 1)
@@ -2158,6 +2163,7 @@ def process_job(job_id: str, paths: list[Path], profile: dict[str, Any], airline
                     current_batch=(index + SCORING_BATCH_SIZE - 1) // SCORING_BATCH_SIZE,
                     total_batches=summary_batches,
                 )
+        summary_seconds = time.perf_counter() - summary_started
         package_records(results, package_id)
         synopsis = build_bid_synopsis(pairings)
         total_scored = int(get_job(job_id)["records_processed"] or 0) if get_job(job_id) else len(results)
@@ -2165,6 +2171,8 @@ def process_job(job_id: str, paths: list[Path], profile: dict[str, Any], airline
         timings = {
             "processing_seconds": round(time.perf_counter() - process_started, 3),
             "scoring_seconds": round(scoring_seconds, 3),
+            "summary_construction_seconds": round(summary_seconds, 3),
+            "time_to_first_usable_results_seconds": round(time.perf_counter() - process_started, 3),
             "records_per_second": throughput,
             "slowest_records": [
                 {"trip_id": record_id, "seconds": round(seconds, 3)}
