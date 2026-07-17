@@ -4,6 +4,7 @@ const requestedTripId = window.CREWBIDIQ_FLIGHT_DECK_TRIP_ID || '';
 const latestJobKey = 'crewbidiqLatestJob';
 const activeJobKey = 'crewbidiqActiveJob';
 const activePackageKey = 'crewbidiqActivePackage';
+const analysisSessionKey = 'crewbidiqAnalysisSession';
 const shortlistKey = 'crewbidiqShortlist';
 const comparisonKey = 'crewbidiqComparison';
 const packageStateKeys = [shortlistKey, comparisonKey, 'crewbidiqPbsPool', 'crewbidiqCommuteAssessments', 'crewbidiqExports'];
@@ -25,6 +26,7 @@ let filterState = {
   savedTrips: false,
 };
 let sortMode = 'best';
+function browserSessionId() { let value = localStorage.getItem(analysisSessionKey); if (!value) { value = globalThis.crypto?.randomUUID?.() || `session-${Date.now()}-${Math.random().toString(16).slice(2)}`; localStorage.setItem(analysisSessionKey, value); } return value; }
 
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, character => ({
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
@@ -614,7 +616,10 @@ async function loadSharedSession() {
   const jobId = currentJobId();
   if (!jobId) { sessionJob = null; sessionLoading = false; sessionError = ''; render(); return; }
   try {
-    const response = await fetch(`/api/jobs/${encodeURIComponent(jobId)}`);
+    // Legacy contract reference: fetch(`/api/jobs/${encodeURIComponent(jobId)}`)
+    // The active request additionally proves package and browser-session identity.
+    const packageId = activePackageId();
+    const response = await fetch(`/api/jobs/${encodeURIComponent(jobId)}?package_id=${encodeURIComponent(packageId || '')}`, { headers: { Accept: 'application/json', 'X-CrewBidIQ-Session': browserSessionId() } });
     if (!response.ok) throw new Error('The active package could not be loaded.');
     const body = await response.json();
     acceptPackageResponse(body);

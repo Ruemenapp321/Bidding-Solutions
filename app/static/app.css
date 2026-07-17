@@ -241,3 +241,6 @@ html[data-theme="dark"]{--bg:#06111f;--surface:#0b1b2d;--surface2:#10243a;--text
 @media(max-width:390px){
   .fd-filter-list,.fd-metrics,.fd-compare-metrics,.fd-fact-grid,.fd-source-meta{grid-template-columns:1fr}
 }
+.analysis-debug{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:5px 12px;margin:12px 0 0;padding:10px;border:1px solid var(--line);border-radius:9px;background:var(--surface);font:10px/1.35 ui-monospace,SFMono-Regular,Consolas,monospace}.analysis-debug dt{color:var(--muted)}.analysis-debug dd{min-width:0;margin:0;color:var(--text);overflow-wrap:anywhere}
+#labsResumeAnalysis{min-height:44px;margin-top:10px}
+@media(max-width:620px){.analysis-debug{grid-template-columns:1fr}.analysis-debug dd{margin-bottom:5px}.labs-processing{max-width:100%;overflow:hidden;overflow-wrap:anywhere}#labsResumeAnalysis{width:100%}}
