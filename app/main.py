@@ -24,7 +24,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from app.airlines import airline_terminology_payload, get_airline_terminology
-from app.airports import coterminal_group_for_airport, coterminal_payload, expand_airports
+from app.airports import coterminal_group_for_airport, coterminal_payload, expand_airports, is_international_airport, is_valid_airport_code
 from app.canonical import attach_canonical_trip, canonical_presentation_record, public_canonical_trip
 from app.destinations import is_transcontinental, taxonomy_payload
 from app.fatigue import build_fatigue_index
@@ -49,7 +49,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = Path(os.environ.get("DATA_DIR", BASE_DIR / "data"))
 UPLOAD_DIR = DATA_DIR / "uploads"
 DB_PATH = DATA_DIR / "pairingiq.db"
-PARSER_CACHE_VERSION = "2026-07-17.2"
+PARSER_CACHE_VERSION = "2026-07-17.3"
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024
 MAX_PARSE_SECONDS = int(os.environ.get("MAX_PARSE_SECONDS", "600"))
 
@@ -738,22 +738,29 @@ def list_field(value: Any) -> list[str]:
     return [str(x).strip().upper() for x in source if str(x).strip()]
 
 
+def ordered_operating_airports(pairing: dict[str, Any] | None) -> list[str]:
+    """Build a route path only from normalized flight-leg endpoints."""
+    if not pairing:
+        return []
+    airline = airline_for_pairing(pairing)
+    path: list[str] = []
+    for leg in pairing.get("legs", []) or []:
+        origin = str(leg.get("departure") or leg.get("origin") or "").strip().upper()
+        destination = str(leg.get("arrival") or leg.get("destination") or "").strip().upper()
+        if not (len(origin) == len(destination) == 3 and origin.isalpha() and destination.isalpha()):
+            continue
+        if airline == "delta" and (not is_valid_airport_code(origin) or not is_valid_airport_code(destination)):
+            continue
+        if not path or path[-1] != origin:
+            path.append(origin)
+        path.append(destination)
+    return path
+
+
 def detect_airports(block: str, pairing: dict[str, Any] | None = None) -> list[str]:
-    if pairing and pairing.get("legs"):
-        out=[]
-        for leg in pairing["legs"]:
-            for code in (leg.get("departure"), leg.get("arrival")):
-                if code and code not in out: out.append(code)
-        return out
-    excluded = {
-        "TOTAL", "CREDIT", "CHECK", "PAGE", "PILOT", "PAIR", "TRIP",
-        "FDP", "TAFB", "MAX", "DAY", "MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN",
-    }
-    out = []
-    for code in re.findall(r"\b[A-Z]{3}\b", block.upper()):
-        if code not in excluded and code not in out:
-            out.append(code)
-    return out[:50]
+    """Return unique operating cities; raw source text is never an airport source."""
+    del block  # Retained for compatibility with existing callers.
+    return list(dict.fromkeys(ordered_operating_airports(pairing)))
 
 
 def detect_layover_cities(pairing: dict[str, Any]) -> list[str]:
@@ -1040,7 +1047,8 @@ def score_pairing(pairing: dict[str, Any], profile: dict[str, Any]) -> dict[str,
     block = pairing["block"]
     upper = block.upper()
     airline = airline_for_pairing(pairing)
-    touched_cities = detect_airports(block, pairing)
+    ordered_airports = canonical_trip["ordered_operating_airports"]
+    touched_cities = canonical_trip["operating_cities"]
     cities = detect_layover_cities(pairing)
     if airline == "southwest":
         dates = list(dict.fromkeys(str(leg.get("event_date")) for leg in pairing.get("legs", []) if leg.get("event_date")))
@@ -1234,6 +1242,10 @@ def score_pairing(pairing: dict[str, Any], profile: dict[str, Any]) -> dict[str,
         "dates": dates,
         "cities": cities,
         "touched_cities": touched_cities,
+        "ordered_operating_airports": ordered_airports,
+        "operating_cities": touched_cities,
+        "route_map_airports": canonical_trip["route_map_airports"],
+        "simplified_route": canonical_trip["simplified_route"],
         "start_airport": start_airport,
         "coterminal_group": coterminal_group_for_airport(airline, start_airport),
         "preferred_aircraft": aircraft_hits,
@@ -1299,6 +1311,7 @@ def score_pairing(pairing: dict[str, Any], profile: dict[str, Any]) -> dict[str,
         "aircraft_display_names": pairing.get("aircraft_display_names", []),
         "duty_periods": pairing.get("duty_periods", []),
         "transcontinental": is_transcontinental(result_legs),
+        "international": any(is_international_airport(code) for code in touched_cities),
         "long_haul": any(
             (float(str(leg.get("block") or "0").replace(":", ".")) >= 6.0)
             for leg in result_legs

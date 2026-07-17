@@ -125,6 +125,8 @@ function matchLabel(item) {
 }
 
 function simplifiedRoute(item) {
+  const normalized = tripModel(item).simplified_route;
+  if (normalized) return normalized;
   const legs = tripLegs(item);
   if (!legs.length) return item?.route || 'Route unavailable';
   return [legs[0].origin, ...legs.map(leg => leg.destination)].filter(Boolean).join('–');

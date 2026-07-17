@@ -53,6 +53,7 @@ function readJson(key, fallback = null) {
 
 function tripModel(item) { return item?.canonical_trip || null; }
 function tripLayovers(item) { return tripModel(item)?.layovers || item?.layovers || []; }
+function tripOperatingCities(item) { return tripModel(item)?.operating_cities || []; }
 function tripPayBreakdown(item) { return tripModel(item)?.pay_breakdown || item?.pay_breakdown || { trip_credit: item?.trip_credit ?? item?.credit, total_pay: item?.total_pay }; }
 function tripTfp(item) { return tripModel(item)?.tfp || item?.tfp || { pairing_tfp: item?.pairing_tfp }; }
 
