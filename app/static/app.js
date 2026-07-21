@@ -12,6 +12,7 @@ let activeJob = analysisState.job_id || localStorage.getItem('crewbidiqActiveJob
 let latestJob = localStorage.getItem('crewbidiqLatestJob');
 const locallyActivePackageId = localStorage.getItem('crewbidiqActivePackage');
 let activePackageId = locallyActivePackageId || analysisState.package_id;
+let statusRequestController = null;
 if (analysisState.package_id && locallyActivePackageId && analysisState.package_id !== locallyActivePackageId) {
   activeJob = null; analysisState = {}; localStorage.removeItem('crewbidiqActiveJob'); localStorage.removeItem(analysisStateKey);
 }
@@ -24,13 +25,17 @@ let lastConfirmedProgress = Number(analysisState.progress_percent || 0);
 let latestStatusCode = analysisState.latest_status_code || null;
 const MAX_POLL_RETRIES = 6;
 const ACTIVE_ANALYSIS_STATES = new Set(['queued', 'parsing', 'normalizing', 'ranking', 'reconnecting']);
+function lightweightAnalysisState(value = {}) {
+  const keys = ['job_id', 'package_id', 'filename', 'airline', 'status', 'state', 'current_stage', 'stage_label', 'progress', 'progress_percent', 'message', 'user_message', 'error', 'error_code', 'created_at', 'updated_at', 'last_successful_poll_at', 'retry_count', 'recoverable', 'package_persisted', 'latest_status_code'];
+  return Object.fromEntries(keys.filter(key => value[key] !== undefined).map(key => [key, value[key]]));
+}
 function persistAnalysisState(patch = {}) {
-  analysisState = { ...analysisState, ...patch, package_id: activePackageId || patch.package_id || null, job_id: activeJob || patch.job_id || null };
+  analysisState = { ...lightweightAnalysisState(analysisState), ...lightweightAnalysisState(patch), package_id: activePackageId || patch.package_id || null, job_id: activeJob || patch.job_id || null };
   localStorage.setItem(analysisStateKey, JSON.stringify(analysisState));
   updateAnalysisDebug();
 }
 function clearActiveAnalysis({ clearPackage = false } = {}) {
-  clearTimeout(pollTimer); pollTimer = null; pollInFlight = false; resumeInFlight = false; pollFailures = 0;
+  clearTimeout(pollTimer); pollTimer = null; statusRequestController?.abort(); statusRequestController = null; pollInFlight = false; resumeInFlight = false; pollFailures = 0;
   localStorage.removeItem('crewbidiqActiveJob'); localStorage.removeItem(analysisStateKey); activeJob = null; analysisState = {}; lastConfirmedProgress = 0;
   if (clearPackage) { localStorage.removeItem('crewbidiqActivePackage'); activePackageId = null; }
   updateAnalysisDebug();
@@ -168,7 +173,8 @@ function stateFromJob(body) {
 }
 async function fetchJobStatus() {
   if (!activeJob || !activePackageId) throw Object.assign(new Error('No recoverable analysis reference exists.'), { status: 400, detail: { error_code: 'PACKAGE_NOT_PERSISTED' } });
-  const controller = new AbortController(); const timeout = setTimeout(() => controller.abort(), 12000);
+  statusRequestController?.abort();
+  const controller = new AbortController(); statusRequestController = controller; const timeout = setTimeout(() => controller.abort(), 12000);
   try {
     const response = await fetch(`/api/jobs/${encodeURIComponent(activeJob)}?package_id=${encodeURIComponent(activePackageId)}`, { headers: analysisHeaders(), signal: controller.signal });
     latestStatusCode = response.status;
@@ -176,7 +182,7 @@ async function fetchJobStatus() {
     if (!response.ok) { const detail = errorDetail(body, 'Could not read analysis status.'); throw Object.assign(new Error(detail.user_message), { status: response.status, detail }); }
     if (body.job_id !== activeJob || body.package_id !== activePackageId) throw Object.assign(new Error('The returned analysis does not match the active bid package.'), { status: 409, detail: { error_code: 'JOB_PACKAGE_MISMATCH' } });
     return body;
-  } finally { clearTimeout(timeout); }
+  } finally { clearTimeout(timeout); if (statusRequestController === controller) statusRequestController = null; }
 }
 function finishCompletedJob(body) {
   const completedJob = activeJob;
@@ -229,7 +235,7 @@ async function pollJob() {
   if (pollInFlight || !activeJob || !activePackageId) return;
   pollInFlight = true;
   try { applyJobStatus(await fetchJobStatus()); }
-  catch (error) { handlePollFailure(error); }
+  catch (error) { if (error.name !== 'AbortError') handlePollFailure(error); }
   finally { pollInFlight = false; }
 }
 async function restartPersistedAnalysis() {
@@ -255,6 +261,7 @@ async function resumeAnalysis() {
     if ((state === 'failed' || state === 'expired') && body.package_persisted && body.recoverable) await restartPersistedAnalysis();
     else applyJobStatus(body);
   } catch (error) {
+    if (error.name === 'AbortError') return;
     if (error.status === 404 || error.status === 410) {
       try { await restartPersistedAnalysis(); }
       catch (restartError) { handlePollFailure(restartError); }
@@ -476,6 +483,15 @@ if (activeJob && activePackageId) {
 window.addEventListener('online', () => { if (activeJob && !pollInFlight) resumeAnalysis(); });
 window.addEventListener('pageshow', () => { if (activeJob && !pollInFlight) resumeAnalysis(); });
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && activeJob && !pollInFlight) resumeAnalysis(); });
+window.addEventListener('pagehide', event => {
+  if (!event.persisted) return;
+  clearTimeout(pollTimer); statusRequestController?.abort(); statusRequestController = null;
+  allResults = []; bidSynopsis = null;
+  $('results')?.replaceChildren(); $('nearResults')?.replaceChildren(); $('synopsisMetrics')?.replaceChildren();
+});
+window.addEventListener('pageshow', event => {
+  if (event.persisted && document.body.dataset.classicPage === 'results' && latestJob && activePackageId && !activeJob) loadLatestJob();
+});
 // Demo fixtures are isolated in an explicit, non-persistent package namespace.
 $('demoBtn').addEventListener('click', () => { clearActiveAnalysis(); packageStateKeys.forEach(key => localStorage.removeItem(key)); activePackageId = 'demo:explicit'; localStorage.setItem('crewbidiqActivePackage', activePackageId); latestJob = null; allResults = allResults.map(item => ({ ...item, package_id: activePackageId, demo_mode: true })); $('runPreferencesBtn').disabled = true; $('csvLink').classList.add('disabled'); setLabsContinuation(false); render(); });
 if (latestJob && activePackageId) { $('runPreferencesBtn').disabled = false; $('csvLink').href = `/api/jobs/${latestJob}/report.pdf?package_id=${encodeURIComponent(activePackageId)}`; $('csvLink').classList.remove('disabled'); setLabsContinuation(true); }
